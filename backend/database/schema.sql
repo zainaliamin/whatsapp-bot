@@ -41,3 +41,16 @@ CREATE TABLE IF NOT EXISTS messages (
   INDEX idx_messages_user_created (user_id, created_at),
   INDEX idx_messages_status (message_status)
 );
+
+CREATE TABLE IF NOT EXISTS whatsapp_number_checks (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  phone_number VARCHAR(30) NOT NULL,
+  whatsapp_jid VARCHAR(80) NULL,
+  is_on_whatsapp TINYINT(1) NOT NULL,
+  checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME NOT NULL,
+  UNIQUE KEY uniq_number_checks_user_phone (user_id, phone_number),
+  INDEX idx_number_checks_expires_at (expires_at),
+  CONSTRAINT fk_number_checks_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);

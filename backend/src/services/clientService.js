@@ -6,12 +6,27 @@ const { ApiError } = require("../utils/ApiError");
 const { CLIENT_STATUS } = require("../utils/constants");
 
 async function createClient(userId) {
+  const sessionPath = path.join(process.cwd(), "sessions", `user-${userId}`);
   const existing = await clientRepository.findByUserId(userId);
   if (existing) {
-    throw new ApiError(409, "User already has a WhatsApp client. Delete it before creating a new one.");
+    if (![CLIENT_STATUS.CREATED, CLIENT_STATUS.QR_READY, CLIENT_STATUS.DISCONNECTED, CLIENT_STATUS.LOGOUT].includes(existing.status)) {
+      throw new ApiError(409, "User already has an active WhatsApp client.");
+    }
+
+    clientManager.resetSessionFiles(userId, sessionPath);
+    await clientRepository.updateStatusByUserId(userId, CLIENT_STATUS.CREATED);
+    await clientManager.initClient(userId, existing.id, sessionPath, {
+      allowPairing: true,
+      force: true
+    });
+
+    return {
+      id: existing.id,
+      userId,
+      status: CLIENT_STATUS.CREATED
+    };
   }
 
-  const sessionPath = path.join(process.cwd(), "sessions", `user-${userId}`);
   const created = await clientRepository.createClient({
     userId,
     status: CLIENT_STATUS.CREATED,

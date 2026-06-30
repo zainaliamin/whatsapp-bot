@@ -5,6 +5,27 @@ import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+const MESSAGE_SEND_WAIT_SECONDS = getPositiveInteger(
+  process.env.NEXT_PUBLIC_MESSAGE_SEND_WAIT_SECONDS,
+  30
+);
+
+function getPositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitBeforeSend(setCountdown) {
+  for (let seconds = MESSAGE_SEND_WAIT_SECONDS; seconds > 0; seconds -= 1) {
+    setCountdown(seconds);
+    await sleep(1000);
+  }
+  setCountdown(0);
+}
 
 function TextMessageIcon() {
   return (
@@ -66,6 +87,7 @@ function apiSend(path, body, apiToken) {
 function SendTextForm({ apiToken, onSent }) {
   const [form, setForm] = useState({ recipientNumber: "", messageText: "" });
   const [sending, setSending] = useState(false);
+  const [countdown, setCountdown] = useState(0);
   const [msg, setMsg] = useState({ text: "", ok: false });
 
   async function handleSubmit(e) {
@@ -73,6 +95,7 @@ function SendTextForm({ apiToken, onSent }) {
     setMsg({ text: "", ok: false });
     setSending(true);
     try {
+      await waitBeforeSend(setCountdown);
       const r = await apiSend("/api/messages/send-text", form, apiToken);
       const d = await r.json();
       if (!r.ok || !d.success) throw new Error(d.message || "Failed to send");
@@ -82,6 +105,7 @@ function SendTextForm({ apiToken, onSent }) {
     } catch (err) {
       setMsg({ text: err.message, ok: false });
     } finally {
+      setCountdown(0);
       setSending(false);
     }
   }
@@ -115,7 +139,7 @@ function SendTextForm({ apiToken, onSent }) {
       )}
       <button type="submit" disabled={sending}
         className="justify-self-start rounded-full bg-(--brand) px-6 py-2.5 text-sm font-semibold text-white hover:bg-(--brand-strong) disabled:opacity-60 transition-colors">
-        {sending ? "Sending..." : "Send Text"}
+        {countdown > 0 ? `Sending in ${countdown}s...` : sending ? "Sending..." : "Send Text"}
       </button>
     </form>
   );
@@ -125,6 +149,7 @@ function SendTextForm({ apiToken, onSent }) {
 function SendImageForm({ apiToken, onSent }) {
   const [form, setForm] = useState({ recipientNumber: "", imageUrl: "", caption: "" });
   const [sending, setSending] = useState(false);
+  const [countdown, setCountdown] = useState(0);
   const [msg, setMsg] = useState({ text: "", ok: false });
 
   async function handleSubmit(e) {
@@ -132,6 +157,7 @@ function SendImageForm({ apiToken, onSent }) {
     setMsg({ text: "", ok: false });
     setSending(true);
     try {
+      await waitBeforeSend(setCountdown);
       const r = await apiSend("/api/messages/send-image", form, apiToken);
       const d = await r.json();
       if (!r.ok || !d.success) throw new Error(d.message || "Failed to send");
@@ -141,6 +167,7 @@ function SendImageForm({ apiToken, onSent }) {
     } catch (err) {
       setMsg({ text: err.message, ok: false });
     } finally {
+      setCountdown(0);
       setSending(false);
     }
   }
@@ -185,7 +212,7 @@ function SendImageForm({ apiToken, onSent }) {
       )}
       <button type="submit" disabled={sending}
         className="justify-self-start rounded-full bg-(--accent) px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60 transition-opacity">
-        {sending ? "Sending..." : "Send Image"}
+        {countdown > 0 ? `Sending in ${countdown}s...` : sending ? "Sending..." : "Send Image"}
       </button>
     </form>
   );
@@ -355,4 +382,3 @@ export default function MessagesPage() {
     </div>
   );
 }
-

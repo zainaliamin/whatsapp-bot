@@ -10,8 +10,51 @@ const { CLIENT_STATUS } = require("../utils/constants");
 
 let baileysModuleCache = null;
 
+function positiveNumberFromEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+const SESSION_CRYPTO_ERROR_LIMIT = positiveNumberFromEnv("WA_SESSION_ERROR_LIMIT", 20);
+const SESSION_CRYPTO_ERROR_WINDOW_MS = positiveNumberFromEnv("WA_SESSION_ERROR_WINDOW_MS", 60_000);
+
 function fireAndForget(task, onError) {
   Promise.resolve(task()).catch(onError);
+}
+
+function normalizeLogArg(arg) {
+  if (!arg) {
+    return "";
+  }
+
+  if (typeof arg === "string") {
+    return arg;
+  }
+
+  if (arg instanceof Error) {
+    return `${arg.name} ${arg.message} ${arg.stack || ""}`;
+  }
+
+  if (typeof arg === "object") {
+    const err = arg.err || arg.error;
+    const errText = err ? normalizeLogArg(err) : "";
+    return `${arg.msg || ""} ${arg.message || ""} ${errText}`;
+  }
+
+  return String(arg);
+}
+
+function isSessionCryptoError(args) {
+  const text = args.map(normalizeLogArg).join(" ").toLowerCase();
+  return (
+    text.includes("bad mac") ||
+    text.includes("no matching sessions found") ||
+    text.includes("failed to decrypt message")
+  );
+}
+
+function safeTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
 async function getBaileysModule() {
@@ -34,6 +77,9 @@ class ClientManager {
   constructor() {
     this.clients = new Map();
     this.pendingInitializations = new Map();
+    this.sessionCryptoErrors = new Map();
+    this.quarantinedUsers = new Set();
+    this.quarantiningUsers = new Set();
   }
 
   getSessionPath(userId) {
@@ -49,6 +95,13 @@ class ClientManager {
     const { allowPairing = true, force = false } = options;
     const userKey = String(userId);
     const directory = sessionPath || this.getSessionPath(userId);
+
+    if (allowPairing) {
+      this.quarantinedUsers.delete(userKey);
+      this.sessionCryptoErrors.delete(userKey);
+    } else if (this.quarantinedUsers.has(userKey)) {
+      throw new Error("WhatsApp session is quarantined and requires QR reconnect");
+    }
 
     if (!allowPairing && !fs.existsSync(path.join(directory, "creds.json"))) {
       throw new Error("Saved session credentials not found");
@@ -94,6 +147,7 @@ class ClientManager {
     const sock = makeWASocket({
       version,
       auth: state,
+      logger: this.createBaileysLogger(userId, clientId),
       printQRInTerminal: false,
       markOnlineOnConnect: false
     });
@@ -146,10 +200,13 @@ class ClientManager {
             const reasonCode = lastDisconnect?.error?.output?.statusCode;
             const isLoggedOut = reasonCode === DisconnectReason.loggedOut;
             const current = this.clients.get(userKey);
+            const isCurrentSocket = current?.sock === sock;
 
-            if (current?.sock === sock) {
-              this.clients.delete(userKey);
+            if (!isCurrentSocket) {
+              return;
             }
+
+            this.clients.delete(userKey);
 
             // Keep DB status enum-compatible; runtime event can still signal LOGOUT.
             await clientRepository.updateStatusByUserId(userId, CLIENT_STATUS.DISCONNECTED);
@@ -159,6 +216,10 @@ class ClientManager {
             });
 
             logger.warn({ userId, reasonCode }, "WhatsApp client disconnected");
+
+            if (this.quarantinedUsers.has(userKey)) {
+              return;
+            }
 
             if (isLoggedOut) {
               try {
@@ -195,6 +256,139 @@ class ClientManager {
 
   getClientByUserId(userId) {
     return this.clients.get(String(userId));
+  }
+
+  createBaileysLogger(userId, clientId, baseLogger = logger.child({ class: "baileys", userId, clientId })) {
+    const wrap = (targetLogger) => ({
+      trace: (...args) => targetLogger.trace(...args),
+      debug: (...args) => targetLogger.debug(...args),
+      info: (...args) => targetLogger.info(...args),
+      warn: (...args) => targetLogger.warn(...args),
+      fatal: (...args) => targetLogger.fatal(...args),
+      error: (...args) => {
+        if (isSessionCryptoError(args)) {
+          this.recordSessionCryptoError(userId, clientId, args);
+        }
+        targetLogger.error(...args);
+      },
+      child: (bindings) => wrap(targetLogger.child(bindings))
+    });
+
+    return wrap(baseLogger);
+  }
+
+  recordSessionCryptoError(userId, clientId, args) {
+    const userKey = String(userId);
+    if (this.quarantinedUsers.has(userKey) || this.quarantiningUsers.has(userKey)) {
+      return;
+    }
+
+    const now = Date.now();
+    const recent = (this.sessionCryptoErrors.get(userKey) || [])
+      .filter((timestamp) => now - timestamp <= SESSION_CRYPTO_ERROR_WINDOW_MS);
+    recent.push(now);
+    this.sessionCryptoErrors.set(userKey, recent);
+
+    if (recent.length < SESSION_CRYPTO_ERROR_LIMIT) {
+      logger.warn(
+        { userId, clientId, count: recent.length, limit: SESSION_CRYPTO_ERROR_LIMIT },
+        "WhatsApp session crypto error recorded"
+      );
+      return;
+    }
+
+    logger.error(
+      { userId, clientId, count: recent.length, sample: args.map(normalizeLogArg).join(" ") },
+      "WhatsApp session exceeded crypto error limit; quarantining session"
+    );
+
+    fireAndForget(
+      () => this.quarantineClientSession(userId, clientId, "Repeated WhatsApp crypto errors"),
+      (err) => logger.error({ err, userId, clientId }, "WhatsApp session quarantine failed")
+    );
+  }
+
+  async quarantineClientSession(userId, clientId, reason) {
+    const userKey = String(userId);
+    if (this.quarantiningUsers.has(userKey) || this.quarantinedUsers.has(userKey)) {
+      return;
+    }
+
+    this.quarantiningUsers.add(userKey);
+    this.quarantinedUsers.add(userKey);
+
+    try {
+      const existing = this.clients.get(userKey);
+      if (existing?.sock) {
+        try {
+          existing.sock.end?.(new Error(reason));
+        } catch (err) {
+          logger.warn({ err, userId, clientId }, "Failed to end quarantined WhatsApp socket");
+        }
+
+        try {
+          existing.sock.ws?.close?.();
+        } catch (err) {
+          logger.warn({ err, userId, clientId }, "Failed to close quarantined WhatsApp websocket");
+        }
+      }
+
+      this.clients.delete(userKey);
+      this.pendingInitializations.delete(userKey);
+      this.sessionCryptoErrors.delete(userKey);
+
+      const directory = existing?.sessionPath || this.getSessionPath(userId);
+      let quarantinedPath = null;
+      if (fs.existsSync(directory)) {
+        const disabledRoot = path.join(process.cwd(), "sessions_disabled");
+        fs.mkdirSync(disabledRoot, { recursive: true });
+        quarantinedPath = path.join(disabledRoot, `user-${userId}-${safeTimestamp()}`);
+        fs.renameSync(directory, quarantinedPath);
+      }
+
+      await clientRepository.updateStatusByUserId(userId, CLIENT_STATUS.DISCONNECTED);
+      emitToUser(userId, "client:disconnected", {
+        status: CLIENT_STATUS.DISCONNECTED,
+        message: "WhatsApp session was reset. Scan QR again to reconnect."
+      });
+      emitToUser(userId, "client:error", {
+        message: "WhatsApp session was reset after repeated encryption errors. Scan QR again."
+      });
+
+      logger.error(
+        { userId, clientId, reason, quarantinedPath },
+        "WhatsApp session quarantined"
+      );
+    } finally {
+      this.quarantiningUsers.delete(userKey);
+    }
+  }
+
+  resetSessionFiles(userId, sessionPath) {
+    const userKey = String(userId);
+    const existing = this.clients.get(userKey);
+    if (existing?.sock) {
+      try {
+        existing.sock.end?.(new Error("Resetting WhatsApp session"));
+      } catch (err) {
+        logger.warn({ err, userId }, "Failed to end WhatsApp socket during session reset");
+      }
+
+      try {
+        existing.sock.ws?.close?.();
+      } catch (err) {
+        logger.warn({ err, userId }, "Failed to close WhatsApp websocket during session reset");
+      }
+    }
+    this.clients.delete(userKey);
+
+    const directory = sessionPath || this.getSessionPath(userId);
+    if (fs.existsSync(directory)) {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+    fs.mkdirSync(directory, { recursive: true });
+    this.quarantinedUsers.delete(userKey);
+    this.sessionCryptoErrors.delete(userKey);
   }
 
   async logoutClient(userId) {

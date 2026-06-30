@@ -148,6 +148,7 @@ export default function ClientPage() {
   const currentStatus = liveStatus ?? clientData?.status;
   const isQrReady    = currentStatus === STATUS.QR_READY;
   const isReady      = currentStatus === STATUS.READY;
+  const canReconnect = hasClient && [STATUS.DISCONNECTED, STATUS.LOGOUT].includes(currentStatus);
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -258,6 +259,15 @@ export default function ClientPage() {
             className="rounded-full border border-(--line) px-5 py-2.5 text-sm font-semibold hover:bg-(--surface)"
           >
             Logout Client
+          </button>
+        )}
+
+        {!loading && canReconnect && (
+          <button
+            onClick={() => clientAction("/api/client/create", "POST", "Reconnect started. Scan the QR code to connect.")}
+            className="rounded-full bg-(--brand) px-5 py-2.5 text-sm font-semibold text-white hover:bg-(--brand-strong)"
+          >
+            Reconnect Client
           </button>
         )}
 

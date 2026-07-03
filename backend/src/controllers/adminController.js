@@ -14,13 +14,18 @@ const listUsers = asyncHandler(async (_req, res) => {
 });
 
 const deleteUser = asyncHandler(async (req, res) => {
-  await userService.deleteUser(Number(req.params.userId));
+  await userService.deleteUser(Number(req.params.userId), req.user.id);
   return sendSuccess(res, "User deleted", null);
 });
 
 const updateUser = asyncHandler(async (req, res) => {
-  const user = await userService.updateUser(Number(req.params.userId), req.body);
+  const user = await userService.updateUser(Number(req.params.userId), req.body, req.user.id);
   return sendSuccess(res, "User updated", user);
+});
+
+const resetUserPassword = asyncHandler(async (req, res) => {
+  await userService.resetUserPasswordByAdmin(Number(req.params.userId), req.body);
+  return sendSuccess(res, "Password reset", null);
 });
 
 const getReport = asyncHandler(async (_req, res) => {
@@ -33,5 +38,6 @@ module.exports = {
   listUsers,
   deleteUser,
   updateUser,
+  resetUserPassword,
   getReport
 };

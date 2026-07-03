@@ -20,6 +20,11 @@ async function findById(id) {
   return rows[0] || null;
 }
 
+async function countAdmins() {
+  const rows = await query("SELECT COUNT(*) AS total FROM users WHERE role = 'admin'");
+  return Number(rows[0]?.total || 0);
+}
+
 async function listUsers() {
   return query(
     `SELECT
@@ -84,6 +89,7 @@ module.exports = {
   createUser,
   findByEmail,
   findById,
+  countAdmins,
   listUsers,
   deleteUser,
   updateUser

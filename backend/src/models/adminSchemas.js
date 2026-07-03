@@ -15,7 +15,12 @@ const updateUserSchema = Joi.object({
   messageExpiryDate: Joi.date().iso().allow(null).optional()
 }).min(1);
 
+const resetUserPasswordSchema = Joi.object({
+  newPassword: Joi.string().min(8).max(64).required()
+});
+
 module.exports = {
   createUserSchema,
-  updateUserSchema
+  updateUserSchema,
+  resetUserPasswordSchema
 };

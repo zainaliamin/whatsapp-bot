@@ -1,5 +1,6 @@
 const bcrypt = require("bcryptjs");
 const userRepository = require("../repositories/userRepository");
+const { clientManager } = require("../baileys/clientManager");
 const { ApiError } = require("../utils/ApiError");
 const { ROLES } = require("../utils/constants");
 
@@ -41,14 +42,52 @@ async function listUsers() {
   return userRepository.listUsers();
 }
 
-async function deleteUser(userId) {
+async function deleteUser(userId, actorUserId) {
+  const user = await userRepository.findById(userId);
+  if (!user) {
+    throw new ApiError(404, "User not found");
+  }
+
+  if (Number(userId) === Number(actorUserId)) {
+    throw new ApiError(400, "You cannot delete your own admin account");
+  }
+
+  if (user.role === ROLES.ADMIN) {
+    const adminCount = await userRepository.countAdmins();
+    if (adminCount <= 1) {
+      throw new ApiError(400, "Cannot delete the last admin account");
+    }
+  }
+
+  await clientManager.removeClient(userId);
+
   const deleted = await userRepository.deleteUser(userId);
   if (!deleted) {
     throw new ApiError(404, "User not found");
   }
 }
 
-async function updateUser(userId, updates) {
+async function updateUser(userId, updates, actorUserId = null) {
+  const existing = await userRepository.findById(userId);
+  if (!existing) {
+    throw new ApiError(404, "User not found");
+  }
+
+  if (
+    updates.role !== undefined &&
+    existing.role === ROLES.ADMIN &&
+    updates.role !== ROLES.ADMIN
+  ) {
+    if (Number(userId) === Number(actorUserId)) {
+      throw new ApiError(400, "You cannot remove your own admin role");
+    }
+
+    const adminCount = await userRepository.countAdmins();
+    if (adminCount <= 1) {
+      throw new ApiError(400, "Cannot remove the last admin account");
+    }
+  }
+
   const user = await userRepository.updateUser(userId, updates);
   if (!user) {
     throw new ApiError(404, "User not found");
@@ -62,6 +101,16 @@ async function updateUser(userId, updates) {
     messageExpiryDate: user.message_expiry_date,
     createdAt: user.created_at
   };
+}
+
+async function resetUserPasswordByAdmin(userId, { newPassword }) {
+  const user = await userRepository.findById(userId);
+  if (!user) {
+    throw new ApiError(404, "User not found");
+  }
+
+  const hashed = await bcrypt.hash(newPassword, 10);
+  await userRepository.updateUser(userId, { password: hashed });
 }
 
 async function updateSelfProfile(userId, { name }) {
@@ -98,6 +147,7 @@ module.exports = {
   listUsers,
   deleteUser,
   updateUser,
+  resetUserPasswordByAdmin,
   updateSelfProfile,
   changePassword
 };

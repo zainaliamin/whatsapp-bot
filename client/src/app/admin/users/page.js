@@ -27,6 +27,11 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState("");
   const [savingUserId, setSavingUserId] = useState(null);
   const [updatedUserId, setUpdatedUserId] = useState(null);
+  const [resetUserId, setResetUserId] = useState(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
+  const [resettingUserId, setResettingUserId] = useState(null);
+  const [deletingUserId, setDeletingUserId] = useState(null);
 
   async function loadData() {
     setLoading(true);
@@ -96,10 +101,85 @@ export default function AdminUsersPage() {
       setUpdatedUserId(user.id);
       setTimeout(() => setUpdatedUserId((current) => (current === user.id ? null : current)), 1800);
       await loadData();
+      setMessage({ text: `Updated ${user.email}`, ok: true });
     } catch (err) {
       setMessage({ text: err.message || "Update failed", ok: false });
     } finally {
       setSavingUserId((current) => (current === user.id ? null : current));
+    }
+  }
+
+  function openResetPassword(userId) {
+    setResetUserId(userId);
+    setResetPassword("");
+    setResetConfirmPassword("");
+    setMessage({ text: "", ok: false });
+  }
+
+  async function resetUserPassword(user) {
+    setMessage({ text: "", ok: false });
+
+    if (resetPassword.length < 8) {
+      setMessage({ text: "Password must be at least 8 characters.", ok: false });
+      return;
+    }
+
+    if (resetPassword !== resetConfirmPassword) {
+      setMessage({ text: "Password confirmation does not match.", ok: false });
+      return;
+    }
+
+    setResettingUserId(user.id);
+    try {
+      const res = await apiFetch(`/api/admin/users/${user.id}/password`, {
+        method: "PATCH",
+        body: JSON.stringify({ newPassword: resetPassword }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || "Password reset failed");
+      }
+
+      setResetUserId(null);
+      setResetPassword("");
+      setResetConfirmPassword("");
+      setMessage({ text: `Password reset for ${user.email}`, ok: true });
+    } catch (err) {
+      setMessage({ text: err.message || "Password reset failed", ok: false });
+    } finally {
+      setResettingUserId((current) => (current === user.id ? null : current));
+    }
+  }
+
+  async function deleteUser(user) {
+    setMessage({ text: "", ok: false });
+
+    if (user.id === me?.id) {
+      setMessage({ text: "You cannot delete your own admin account.", ok: false });
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete ${user.email}? This will remove the user, WhatsApp session, API token, and messages.`);
+    if (!confirmed) return;
+
+    setDeletingUserId(user.id);
+    try {
+      const res = await apiFetch(`/api/admin/users/${user.id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || "Delete failed");
+      }
+
+      await loadData();
+      setMessage({ text: `Deleted ${user.email}`, ok: true });
+    } catch (err) {
+      setMessage({ text: err.message || "Delete failed", ok: false });
+    } finally {
+      setDeletingUserId((current) => (current === user.id ? null : current));
     }
   }
 
@@ -120,7 +200,7 @@ export default function AdminUsersPage() {
       <div>
         <p className="text-xs font-bold uppercase tracking-[0.2em] text-(--accent)">Admin</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">Users</h1>
-        <p className="mt-1 text-sm text-(--muted)">Manage users, roles and message expiry settings. User deletion is disabled.</p>
+        <p className="mt-1 text-sm text-(--muted)">Manage users, roles, passwords, message expiry settings, and account deletion.</p>
       </div>
 
       <div className="mt-4 max-w-md">
@@ -213,7 +293,57 @@ export default function AdminUsersPage() {
                           >
                             {savingUserId === user.id ? "Saving..." : updatedUserId === user.id ? "Updated" : "Save"}
                           </button>
+                          <button
+                            onClick={() => openResetPassword(user.id)}
+                            disabled={resettingUserId === user.id}
+                            className="rounded-lg border border-(--line) px-3 py-1.5 text-xs font-semibold text-(--text) transition-colors hover:bg-(--surface) disabled:opacity-60"
+                          >
+                            Reset Password
+                          </button>
+                          <button
+                            onClick={() => deleteUser(user)}
+                            disabled={isSelf || deletingUserId === user.id}
+                            title={isSelf ? "You cannot delete your own admin account" : ""}
+                            className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {deletingUserId === user.id ? "Deleting..." : "Delete"}
+                          </button>
                         </div>
+                        {resetUserId === user.id && (
+                          <div className="mt-3 w-72 rounded-xl border border-(--line) bg-(--surface) p-3">
+                            <div className="space-y-2">
+                              <input
+                                type="password"
+                                value={resetPassword}
+                                onChange={(e) => setResetPassword(e.target.value)}
+                                placeholder="New password"
+                                className="w-full rounded-lg border border-(--line) bg-white px-3 py-2 text-xs outline-none focus:border-(--brand)"
+                              />
+                              <input
+                                type="password"
+                                value={resetConfirmPassword}
+                                onChange={(e) => setResetConfirmPassword(e.target.value)}
+                                placeholder="Confirm password"
+                                className="w-full rounded-lg border border-(--line) bg-white px-3 py-2 text-xs outline-none focus:border-(--brand)"
+                              />
+                            </div>
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                onClick={() => resetUserPassword(user)}
+                                disabled={resettingUserId === user.id}
+                                className="rounded-lg bg-(--brand) px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-(--brand-strong) disabled:opacity-60"
+                              >
+                                {resettingUserId === user.id ? "Resetting..." : "Confirm"}
+                              </button>
+                              <button
+                                onClick={() => setResetUserId(null)}
+                                className="rounded-lg border border-(--line) px-3 py-1.5 text-xs font-semibold text-(--text) transition-colors hover:bg-white"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );

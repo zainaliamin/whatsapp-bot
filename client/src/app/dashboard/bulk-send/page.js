@@ -67,6 +67,17 @@ export default function BulkSendPage() {
     reader.readAsBinaryString(uploadedFile);
   };
 
+  const downloadSampleTemplate = () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Phone Number"],
+      ["1234567890"],
+      ["9876543210"]
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Contacts");
+    XLSX.writeFile(wb, "bulk_send_template.xlsx");
+  };
+
   const handleEnqueue = async () => {
     if (numbers.length === 0) {
       setFeedback("Please upload an Excel file with phone numbers.");
@@ -189,7 +200,15 @@ export default function BulkSendPage() {
         <div className="grid gap-6 sm:grid-cols-2">
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Upload Excel / CSV</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-gray-700">Upload Excel / CSV</label>
+                <button 
+                  onClick={downloadSampleTemplate} 
+                  className="text-xs font-semibold text-(--brand) hover:underline"
+                >
+                  Download Sample Template
+                </button>
+              </div>
               <input 
                 type="file" 
                 accept=".xlsx, .xls, .csv" 

@@ -8,6 +8,7 @@ import { apiFetch } from "@/lib/api";
 const NAV = [
   { href: "/dashboard",               label: "Overview",         icon: "⊞" },
   { href: "/dashboard/messages",      label: "Messages",         icon: "✉" },
+  { href: "/dashboard/bulk-send",     label: "Bulk Send",        icon: "▤" },
   { href: "/dashboard/client",        label: "Client API Setup", icon: "⚙" },
   { href: "/dashboard/api-reference", label: "API Reference",    icon: "⟨/⟩" },
   { href: "/dashboard/profile",       label: "Profile",          icon: "◎" },

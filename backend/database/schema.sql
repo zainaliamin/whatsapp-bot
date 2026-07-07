@@ -54,3 +54,27 @@ CREATE TABLE IF NOT EXISTS whatsapp_number_checks (
   INDEX idx_number_checks_expires_at (expires_at),
   CONSTRAINT fk_number_checks_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS bulk_queue_status (
+  user_id BIGINT PRIMARY KEY,
+  status ENUM('ACTIVE', 'PAUSED') NOT NULL DEFAULT 'PAUSED',
+  next_send_time DATETIME NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_bulk_status_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS bulk_message_queue (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  recipient_number VARCHAR(30) NOT NULL,
+  message_text TEXT NULL,
+  media_url VARCHAR(1024) NULL,
+  caption TEXT NULL,
+  status ENUM('PENDING', 'SENT', 'FAILED') NOT NULL DEFAULT 'PENDING',
+  error_message TEXT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_bulk_queue_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_bulk_queue_status_user (status, user_id)
+);

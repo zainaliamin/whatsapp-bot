@@ -13,5 +13,6 @@ router.use("/users", userRoutes);
 router.use("/client", clientRoutes);
 router.use("/admin", adminRoutes);
 router.use("/messages", messageRoutes);
+router.use("/bulk", require("./bulkRoutes"));
 
 module.exports = router;

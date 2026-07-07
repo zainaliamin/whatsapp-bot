@@ -5,6 +5,7 @@ const { logger } = require("./src/config/logger");
 const { query } = require("./src/config/database");
 const { ensureDefaultAdmin } = require("./src/services/bootstrapService");
 const { clientManager } = require("./src/baileys/clientManager");
+const { startWorker } = require("./src/services/bulkWorker");
 
 const PORT = Number(process.env.PORT || 4000);
 const server = http.createServer(app);
@@ -14,6 +15,7 @@ initSocketServer(server);
 async function startServer() {
   await query("SELECT 1");
   await ensureDefaultAdmin();
+  startWorker();
 
   server.listen(PORT, () => {
     logger.info({ port: PORT }, "Server started");

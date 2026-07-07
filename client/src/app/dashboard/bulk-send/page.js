@@ -101,8 +101,11 @@ export default function BulkSendPage() {
       setFeedback("Please upload an Excel file with phone numbers.");
       return;
     }
-    if (!messageText && !mediaUrl) {
-      setFeedback("Please enter a message or provide a media URL.");
+
+    // Pass if global fallback fields are filled OR if any Excel row has its own content
+    const anyRowHasContent = numbers.some(r => r.messageText || r.mediaUrl);
+    if (!messageText && !mediaUrl && !anyRowHasContent) {
+      setFeedback("Please enter a fallback message or provide a media URL — or include Message Text / Media URL columns in your Excel file.");
       return;
     }
 

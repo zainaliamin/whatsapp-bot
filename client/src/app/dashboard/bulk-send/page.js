@@ -54,24 +54,42 @@ export default function BulkSendPage() {
       const wb = XLSX.read(bstr, { type: "binary" });
       const wsname = wb.SheetNames[0];
       const ws = wb.Sheets[wsname];
+      // Use header:1 to get raw rows as arrays
       const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      
-      const extractedNumbers = data
-        .flat()
-        .filter(cell => cell != null && cell.toString().trim() !== "")
-        .map(cell => cell.toString().replace(/[^0-9]/g, ""))
-        .filter(num => num.length >= 10);
-      
-      setNumbers([...new Set(extractedNumbers)]); // Remove duplicates
+
+      // Check if the first row looks like a header row (non-numeric first cell)
+      const firstCell = data[0]?.[0]?.toString().trim() || "";
+      const hasHeader = isNaN(firstCell.replace(/[^0-9]/g, "")) || firstCell.replace(/[^0-9]/g, "").length < 10;
+      const rows = hasHeader ? data.slice(1) : data;
+
+      const parsed = rows
+        .filter(row => row && row[0] != null && row[0].toString().trim() !== "")
+        .map(row => ({
+          phone: row[0]?.toString().replace(/[^0-9]/g, ""),
+          messageText: row[1]?.toString().trim() || "",
+          mediaUrl: row[2]?.toString().trim() || "",
+          caption: row[3]?.toString().trim() || ""
+        }))
+        .filter(r => r.phone.length >= 10);
+
+      // Remove duplicate phone numbers (keep first occurrence)
+      const seen = new Set();
+      const unique = parsed.filter(r => {
+        if (seen.has(r.phone)) return false;
+        seen.add(r.phone);
+        return true;
+      });
+
+      setNumbers(unique);
     };
     reader.readAsBinaryString(uploadedFile);
   };
 
   const downloadSampleTemplate = () => {
     const ws = XLSX.utils.aoa_to_sheet([
-      ["Phone Number"],
-      ["1234567890"],
-      ["9876543210"]
+      ["Phone Number", "Message Text", "Media URL", "Caption"],
+      ["1234567890", "Hello! This is a custom message for you.", "", ""],
+      ["9876543210", "Hi there!", "https://example.com/image.jpg", "Check this out!"]
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Contacts");
@@ -91,11 +109,12 @@ export default function BulkSendPage() {
     setLoading(true);
     setFeedback("");
 
-    const messages = numbers.map(num => ({
-      recipientNumber: num,
-      messageText,
-      mediaUrl,
-      caption
+    // Per-row Excel values take priority; global form fields are the fallback
+    const messages = numbers.map(row => ({
+      recipientNumber: row.phone,
+      messageText: row.messageText || messageText,
+      mediaUrl: row.mediaUrl || mediaUrl,
+      caption: row.caption || caption
     }));
 
     try {
@@ -209,6 +228,7 @@ export default function BulkSendPage() {
                   Download Sample Template
                 </button>
               </div>
+              <p className="text-xs text-gray-400 mb-2">Columns: <span className="font-medium text-gray-500">Phone Number, Message Text, Media URL, Caption</span>. Excel values override the fields below.</p>
               <input 
                 type="file" 
                 accept=".xlsx, .xls, .csv" 
@@ -217,12 +237,14 @@ export default function BulkSendPage() {
                 className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-(--brand) file:text-white hover:file:bg-black cursor-pointer"
               />
               {numbers.length > 0 && (
-                <p className="mt-2 text-sm text-green-600 font-medium">Found {numbers.length} valid numbers.</p>
+                <p className="mt-2 text-sm text-green-600 font-medium">
+                  Found {numbers.length} valid numbers. {numbers.filter(r => r.messageText || r.mediaUrl).length > 0 && `(${numbers.filter(r => r.messageText || r.mediaUrl).length} have custom messages)`}
+                </p>
               )}
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Message Text</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Fallback Message Text</label>
               <textarea
                 value={messageText}
                 onChange={(e) => setMessageText(e.target.value)}
@@ -235,7 +257,7 @@ export default function BulkSendPage() {
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Media URL (Optional)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Fallback Media URL (Optional)</label>
               <input
                 type="text"
                 value={mediaUrl}
@@ -246,7 +268,7 @@ export default function BulkSendPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Caption for Media (Optional)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Fallback Caption (Optional)</label>
               <input
                 type="text"
                 value={caption}

@@ -76,5 +76,6 @@ CREATE TABLE IF NOT EXISTS bulk_message_queue (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_bulk_queue_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  INDEX idx_bulk_queue_status_user (status, user_id)
+  INDEX idx_bulk_queue_status_user (status, user_id),
+  INDEX idx_bulk_queue_status_updated (status, updated_at)
 );

@@ -81,6 +81,30 @@ const getStats = asyncHandler(async (req, res) => {
   });
 });
 
+const getMessagesByStatus = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const status = String(req.query.status || "").toUpperCase();
+  const requestedLimit = Number.parseInt(req.query.limit, 10);
+  const limit = Number.isInteger(requestedLimit)
+    ? Math.min(Math.max(requestedLimit, 1), 200)
+    : 100;
+
+  if (!["PENDING", "SENT", "FAILED"].includes(status)) {
+    return sendError(res, "A valid message status is required", 400);
+  }
+
+  const messages = await query(`
+    SELECT id, recipient_number, message_text, media_url, caption, status,
+           error_message, created_at, updated_at
+    FROM bulk_message_queue
+    WHERE user_id = ? AND status = ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `, [userId, status, limit]);
+
+  return sendSuccess(res, "Bulk messages fetched", { status, messages, limit });
+});
+
 const setStatus = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const { status } = req.body; // 'ACTIVE' or 'PAUSED'
@@ -117,6 +141,7 @@ const clearPending = asyncHandler(async (req, res) => {
 module.exports = {
   enqueue,
   getStats,
+  getMessagesByStatus,
   setStatus,
   clearPending
 };

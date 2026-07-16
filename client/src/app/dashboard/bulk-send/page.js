@@ -12,6 +12,10 @@ export default function BulkSendPage() {
   const [caption, setCaption] = useState("");
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState(null);
+  const [statusMessages, setStatusMessages] = useState([]);
+  const [statusMessagesLoading, setStatusMessagesLoading] = useState(false);
+  const [statusMessagesError, setStatusMessagesError] = useState("");
   
   const [stats, setStats] = useState({
     PENDING: 0,
@@ -165,6 +169,34 @@ export default function BulkSendPage() {
     }
   };
 
+  const openStatusMessages = async (status) => {
+    setSelectedStatus(status);
+    setStatusMessages([]);
+    setStatusMessagesError("");
+    setStatusMessagesLoading(true);
+
+    try {
+      const res = await apiFetch(`/api/bulk/messages?status=${encodeURIComponent(status)}&limit=200`);
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || "Unable to load messages.");
+      }
+      setStatusMessages(Array.isArray(data.data?.messages) ? data.data.messages : []);
+    } catch (e) {
+      setStatusMessagesError(e.message || "Unable to load messages.");
+    } finally {
+      setStatusMessagesLoading(false);
+    }
+  };
+
+  const closeStatusMessages = () => {
+    setSelectedStatus(null);
+    setStatusMessages([]);
+    setStatusMessagesError("");
+  };
+
+  const formatDate = (value) => value ? new Date(value).toLocaleString() : "-";
+
   return (
     <div className="p-8">
       <p className="text-xs font-bold uppercase tracking-[0.2em] text-(--accent)">Dashboard</p>
@@ -200,20 +232,61 @@ export default function BulkSendPage() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
-          <div className="rounded-xl border border-(--line) bg-gray-50 p-4">
+          <button type="button" onClick={() => openStatusMessages("PENDING")} className="rounded-xl border border-(--line) bg-gray-50 p-4 text-left transition-colors hover:border-blue-300 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Pending</p>
             <p className="mt-1 text-2xl font-semibold text-blue-600">{stats.PENDING}</p>
-          </div>
-          <div className="rounded-xl border border-(--line) bg-gray-50 p-4">
+            <p className="mt-2 text-xs text-gray-500">View messages</p>
+          </button>
+          <button type="button" onClick={() => openStatusMessages("SENT")} className="rounded-xl border border-(--line) bg-gray-50 p-4 text-left transition-colors hover:border-green-300 hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-green-400">
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Sent</p>
             <p className="mt-1 text-2xl font-semibold text-green-600">{stats.SENT}</p>
-          </div>
-          <div className="rounded-xl border border-(--line) bg-gray-50 p-4">
+            <p className="mt-2 text-xs text-gray-500">View messages</p>
+          </button>
+          <button type="button" onClick={() => openStatusMessages("FAILED")} className="rounded-xl border border-(--line) bg-gray-50 p-4 text-left transition-colors hover:border-red-300 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400">
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Failed</p>
             <p className="mt-1 text-2xl font-semibold text-red-600">{stats.FAILED}</p>
-          </div>
+            <p className="mt-2 text-xs text-gray-500">View messages</p>
+          </button>
         </div>
       </div>
+
+      {selectedStatus && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" role="dialog" aria-modal="true" aria-labelledby="bulk-status-modal-title" onMouseDown={(e) => { if (e.target === e.currentTarget) closeStatusMessages(); }}>
+          <div className="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-(--line) px-6 py-4">
+              <div>
+                <h2 id="bulk-status-modal-title" className="text-xl font-semibold">{selectedStatus[0] + selectedStatus.slice(1).toLowerCase()} bulk messages</h2>
+                <p className="mt-1 text-sm text-(--muted)">Showing up to the latest 200 messages.</p>
+              </div>
+              <button type="button" onClick={closeStatusMessages} className="rounded-lg px-3 py-1 text-2xl leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-800" aria-label="Close message list">&times;</button>
+            </div>
+            <div className="max-h-[calc(85vh-88px)] overflow-auto p-6">
+              {statusMessagesLoading && <p className="text-sm text-(--muted)">Loading messages...</p>}
+              {statusMessagesError && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{statusMessagesError}</p>}
+              {!statusMessagesLoading && !statusMessagesError && statusMessages.length === 0 && <p className="text-sm text-(--muted)">No {selectedStatus.toLowerCase()} bulk messages.</p>}
+              {!statusMessagesLoading && !statusMessagesError && statusMessages.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="border-b border-(--line) text-xs uppercase tracking-wide text-gray-500">
+                      <tr><th className="px-3 py-2">Recipient</th><th className="px-3 py-2">Message</th><th className="px-3 py-2">Updated</th>{selectedStatus === "FAILED" && <th className="px-3 py-2">Error</th>}</tr>
+                    </thead>
+                    <tbody>
+                      {statusMessages.map((message) => (
+                        <tr key={message.id} className="border-b border-gray-100 align-top">
+                          <td className="whitespace-nowrap px-3 py-3 font-medium text-gray-800">{message.recipient_number}</td>
+                          <td className="min-w-56 px-3 py-3 text-gray-600"><p className="line-clamp-2">{message.message_text || message.caption || (message.media_url ? "Media message" : "-")}</p>{message.media_url && <a href={message.media_url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs font-medium text-(--brand) hover:underline">Open media</a>}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-gray-500">{formatDate(message.updated_at)}</td>
+                          {selectedStatus === "FAILED" && <td className="min-w-48 px-3 py-3 text-red-600">{message.error_message || "No error details available."}</td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Upload Form */}
       <div className="mt-6 rounded-2xl border border-(--line) bg-white p-6">

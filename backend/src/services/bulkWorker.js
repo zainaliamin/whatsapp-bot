@@ -3,6 +3,37 @@ const messageService = require("./messageService");
 const { logger } = require("../config/logger");
 
 let workerInterval = null;
+let lastTerminalMessageCleanupAt = 0;
+const TERMINAL_MESSAGE_RETENTION_DAYS = 3;
+const CLEANUP_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+function getBulkSendErrorMessage(error) {
+  const message = error?.message || "WhatsApp send failed.";
+  const code = error?.details?.code;
+  const diagnostic = error?.details?.diagnostic;
+  const details = [];
+
+  if (code) details.push(`Code: ${code}`);
+  if (diagnostic && diagnostic !== message) details.push(`Reason: ${diagnostic}`);
+
+  return details.length > 0 ? `${message} (${details.join(". ")})` : message;
+}
+
+async function cleanupExpiredTerminalMessages() {
+  const now = Date.now();
+  if (now - lastTerminalMessageCleanupAt < CLEANUP_CHECK_INTERVAL_MS) return;
+
+  lastTerminalMessageCleanupAt = now;
+  const result = await query(`
+    DELETE FROM bulk_message_queue
+    WHERE status IN ('SENT', 'FAILED')
+      AND updated_at < DATE_SUB(NOW(), INTERVAL ${TERMINAL_MESSAGE_RETENTION_DAYS} DAY)
+  `);
+
+  if (result.affectedRows > 0) {
+    logger.info({ deletedCount: result.affectedRows }, "Deleted expired bulk message records");
+  }
+}
 
 const startWorker = () => {
   if (workerInterval) return;
@@ -20,6 +51,8 @@ const stopWorker = () => {
 
 const processQueue = async () => {
   try {
+    await cleanupExpiredTerminalMessages();
+
     // 1. Find all active users whose next_send_time is null or in the past
     const activeUsers = await query(`
       SELECT user_id 
@@ -80,7 +113,7 @@ const processNextMessageForUser = async (userId) => {
       await query(`UPDATE bulk_message_queue SET status = 'SENT' WHERE id = ?`, [msg.id]);
     } catch (sendError) {
       logger.error({ err: sendError, msgId: msg.id }, "Failed to send bulk message");
-      await query(`UPDATE bulk_message_queue SET status = 'FAILED', error_message = ? WHERE id = ?`, [sendError.message, msg.id]);
+      await query(`UPDATE bulk_message_queue SET status = 'FAILED', error_message = ? WHERE id = ?`, [getBulkSendErrorMessage(sendError), msg.id]);
     }
 
     // Set next send time between 45s and 60s
@@ -95,5 +128,6 @@ const processNextMessageForUser = async (userId) => {
 module.exports = {
   startWorker,
   stopWorker,
-  processQueue
+  processQueue,
+  cleanupExpiredTerminalMessages
 };

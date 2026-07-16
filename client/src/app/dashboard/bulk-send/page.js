@@ -16,6 +16,7 @@ export default function BulkSendPage() {
   const [statusMessages, setStatusMessages] = useState([]);
   const [statusMessagesLoading, setStatusMessagesLoading] = useState(false);
   const [statusMessagesError, setStatusMessagesError] = useState("");
+  const [retryingFailed, setRetryingFailed] = useState(false);
   
   const [stats, setStats] = useState({
     PENDING: 0,
@@ -195,6 +196,29 @@ export default function BulkSendPage() {
     setStatusMessagesError("");
   };
 
+  const requeueFailedMessages = async () => {
+    if (!confirm("Queue all failed messages for one more send attempt?")) return;
+
+    setRetryingFailed(true);
+    setFeedback("");
+    try {
+      const res = await apiFetch("/api/bulk/failed/requeue", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || "Unable to requeue failed messages.");
+      }
+
+      const count = Number(data.data?.count || 0);
+      setFeedback(`${count} failed message${count === 1 ? "" : "s"} queued for resend.`);
+      closeStatusMessages();
+      fetchStats();
+    } catch (e) {
+      setStatusMessagesError(e.message || "Unable to requeue failed messages.");
+    } finally {
+      setRetryingFailed(false);
+    }
+  };
+
   const formatDate = (value) => value ? new Date(value).toLocaleString() : "-";
 
   return (
@@ -258,7 +282,14 @@ export default function BulkSendPage() {
                 <h2 id="bulk-status-modal-title" className="text-xl font-semibold">{selectedStatus[0] + selectedStatus.slice(1).toLowerCase()} bulk messages</h2>
                 <p className="mt-1 text-sm text-(--muted)">Showing up to the latest 200 messages.</p>
               </div>
-              <button type="button" onClick={closeStatusMessages} className="rounded-lg px-3 py-1 text-2xl leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-800" aria-label="Close message list">&times;</button>
+              <div className="flex items-center gap-3">
+                {selectedStatus === "FAILED" && statusMessages.length > 0 && (
+                  <button type="button" onClick={requeueFailedMessages} disabled={retryingFailed} className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60">
+                    {retryingFailed ? "Queueing..." : "Resend All Failed"}
+                  </button>
+                )}
+                <button type="button" onClick={closeStatusMessages} className="rounded-lg px-3 py-1 text-2xl leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-800" aria-label="Close message list">&times;</button>
+              </div>
             </div>
             <div className="max-h-[calc(85vh-88px)] overflow-auto p-6">
               {statusMessagesLoading && <p className="text-sm text-(--muted)">Loading messages...</p>}

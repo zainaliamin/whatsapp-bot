@@ -11,5 +11,6 @@ router.get("/stats", bulkController.getStats);
 router.get("/messages", bulkController.getMessagesByStatus);
 router.post("/status", bulkController.setStatus);
 router.delete("/pending", bulkController.clearPending);
+router.post("/failed/requeue", bulkController.requeueFailed);
 
 module.exports = router;

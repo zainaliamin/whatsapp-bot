@@ -138,10 +138,32 @@ const clearPending = asyncHandler(async (req, res) => {
   return sendSuccess(res, "Pending queue cleared", { deletedCount: result.affectedRows });
 });
 
+const requeueFailed = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+
+  const result = await query(`
+    UPDATE bulk_message_queue
+    SET status = 'PENDING', error_message = NULL
+    WHERE user_id = ? AND status = 'FAILED'
+  `, [userId]);
+
+  if (result.affectedRows > 0) {
+    // Resume immediately so the worker can process the requeued messages.
+    await query(`
+      INSERT INTO bulk_queue_status (user_id, status, next_send_time)
+      VALUES (?, 'ACTIVE', NOW())
+      ON DUPLICATE KEY UPDATE status = 'ACTIVE', next_send_time = NOW()
+    `, [userId]);
+  }
+
+  return sendSuccess(res, "Failed messages requeued", { count: result.affectedRows });
+});
+
 module.exports = {
   enqueue,
   getStats,
   getMessagesByStatus,
   setStatus,
-  clearPending
+  clearPending,
+  requeueFailed
 };

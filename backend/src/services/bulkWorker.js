@@ -55,7 +55,7 @@ const processQueue = async () => {
 
     // 1. Find all active users whose next_send_time is null or in the past
     const activeUsers = await query(`
-      SELECT user_id 
+      SELECT user_id, send_interval_minutes
       FROM bulk_queue_status 
       WHERE status = 'ACTIVE' 
       AND (next_send_time IS NULL OR next_send_time <= NOW())
@@ -66,14 +66,14 @@ const processQueue = async () => {
     }
 
     // 2. Process one message for each active user concurrently
-    const promises = activeUsers.map(user => processNextMessageForUser(user.user_id));
+    const promises = activeUsers.map(user => processNextMessageForUser(user.user_id, user.send_interval_minutes));
     await Promise.allSettled(promises);
   } catch (error) {
     logger.error({ err: error }, "Error in bulk worker processQueue");
   }
 };
 
-const processNextMessageForUser = async (userId) => {
+const processNextMessageForUser = async (userId, sendIntervalMinutes = 1) => {
   try {
     // Lock the next message to prevent double sending (in a simpler implementation we just fetch 1 pending)
     const pendingMessages = await query(`
@@ -116,8 +116,9 @@ const processNextMessageForUser = async (userId) => {
       await query(`UPDATE bulk_message_queue SET status = 'FAILED', error_message = ? WHERE id = ?`, [getBulkSendErrorMessage(sendError), msg.id]);
     }
 
-    // Set next send time between 45s and 60s
-    const delaySeconds = Math.floor(Math.random() * (60 - 45 + 1)) + 45;
+    // Each user controls their own delay in whole minutes (1 minute to 24 hours).
+    const intervalMinutes = Math.min(Math.max(Number.parseInt(sendIntervalMinutes, 10) || 1, 1), 1440);
+    const delaySeconds = intervalMinutes * 60;
     await query(`UPDATE bulk_queue_status SET next_send_time = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE user_id = ?`, [delaySeconds, userId]);
 
   } catch (error) {

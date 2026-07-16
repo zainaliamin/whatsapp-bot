@@ -66,17 +66,21 @@ const getStats = asyncHandler(async (req, res) => {
   });
 
   const statusQuery = await query(`
-    SELECT status, next_send_time 
+    SELECT status, next_send_time, send_interval_minutes
     FROM bulk_queue_status 
     WHERE user_id = ?
   `, [userId]);
 
   const queueStatus = statusQuery.length > 0 ? statusQuery[0].status : 'PAUSED';
   const nextSendTime = statusQuery.length > 0 ? statusQuery[0].next_send_time : null;
+  const sendIntervalMinutes = statusQuery.length > 0
+    ? Number(statusQuery[0].send_interval_minutes || 1)
+    : 1;
 
   return sendSuccess(res, "Bulk stats fetched", {
     queueStatus,
     nextSendTime,
+    sendIntervalMinutes,
     ...stats
   });
 });
@@ -138,6 +142,23 @@ const clearPending = asyncHandler(async (req, res) => {
   return sendSuccess(res, "Pending queue cleared", { deletedCount: result.affectedRows });
 });
 
+const setSendInterval = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const intervalMinutes = Number(req.body?.intervalMinutes);
+
+  if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440) {
+    return sendError(res, "Interval must be a whole number between 1 and 1440 minutes", 400);
+  }
+
+  await query(`
+    INSERT INTO bulk_queue_status (user_id, status, send_interval_minutes)
+    VALUES (?, 'PAUSED', ?)
+    ON DUPLICATE KEY UPDATE send_interval_minutes = ?
+  `, [userId, intervalMinutes, intervalMinutes]);
+
+  return sendSuccess(res, "Bulk send interval updated", { intervalMinutes });
+});
+
 const requeueFailed = asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
@@ -165,5 +186,6 @@ module.exports = {
   getMessagesByStatus,
   setStatus,
   clearPending,
+  setSendInterval,
   requeueFailed
 };

@@ -17,16 +17,20 @@ export default function BulkSendPage() {
   const [statusMessagesLoading, setStatusMessagesLoading] = useState(false);
   const [statusMessagesError, setStatusMessagesError] = useState("");
   const [retryingFailed, setRetryingFailed] = useState(false);
+  const [sendIntervalMinutes, setSendIntervalMinutes] = useState(1);
+  const [savingInterval, setSavingInterval] = useState(false);
   
   const [stats, setStats] = useState({
     PENDING: 0,
     SENT: 0,
     FAILED: 0,
     queueStatus: "PAUSED",
-    nextSendTime: null
+    nextSendTime: null,
+    sendIntervalMinutes: 1
   });
 
   const fileInputRef = useRef(null);
+  const intervalInitializedRef = useRef(false);
 
   useEffect(() => {
     fetchStats();
@@ -41,6 +45,10 @@ export default function BulkSendPage() {
         const data = await res.json();
         if (data.success) {
           setStats(data.data);
+          if (!intervalInitializedRef.current) {
+            setSendIntervalMinutes(Number(data.data.sendIntervalMinutes || 1));
+            intervalInitializedRef.current = true;
+          }
         }
       }
     } catch (e) {
@@ -170,6 +178,35 @@ export default function BulkSendPage() {
     }
   };
 
+  const saveSendInterval = async () => {
+    const intervalMinutes = Number.parseInt(sendIntervalMinutes, 10);
+    if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440) {
+      setFeedback("Please enter a whole number from 1 to 1440 minutes.");
+      return;
+    }
+
+    setSavingInterval(true);
+    setFeedback("");
+    try {
+      const res = await apiFetch("/api/bulk/interval", {
+        method: "POST",
+        body: JSON.stringify({ intervalMinutes })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || "Unable to save the send interval.");
+      }
+
+      setSendIntervalMinutes(intervalMinutes);
+      setFeedback(`Messages will be sent ${intervalMinutes} minute${intervalMinutes === 1 ? "" : "s"} apart.`);
+      fetchStats();
+    } catch (e) {
+      setFeedback(e.message || "Unable to save the send interval.");
+    } finally {
+      setSavingInterval(false);
+    }
+  };
+
   const openStatusMessages = async (status) => {
     setSelectedStatus(status);
     setStatusMessages([]);
@@ -245,7 +282,22 @@ export default function BulkSendPage() {
               )}
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-gray-600">Minutes between messages</span>
+              <input
+                type="number"
+                min="1"
+                max="1440"
+                step="1"
+                value={sendIntervalMinutes}
+                onChange={(e) => setSendIntervalMinutes(e.target.value)}
+                className="w-28 rounded-xl border border-(--line) px-3 py-2 text-sm outline-none focus:border-(--brand)"
+              />
+            </label>
+            <button onClick={saveSendInterval} disabled={savingInterval} className="rounded-xl border border-(--line) bg-white px-4 py-2 text-sm font-semibold text-(--brand) transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60">
+              {savingInterval ? "Saving..." : "Save interval"}
+            </button>
             {stats.queueStatus === 'PAUSED' ? (
               <button onClick={() => changeStatus('ACTIVE')} className="rounded-xl bg-(--brand) px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-black">Resume Queue</button>
             ) : (

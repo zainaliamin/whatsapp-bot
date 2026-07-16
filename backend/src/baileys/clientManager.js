@@ -15,8 +15,8 @@ function positiveNumberFromEnv(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-const SESSION_CRYPTO_ERROR_LIMIT = positiveNumberFromEnv("WA_SESSION_ERROR_LIMIT", 20);
 const SESSION_CRYPTO_ERROR_WINDOW_MS = positiveNumberFromEnv("WA_SESSION_ERROR_WINDOW_MS", 60_000);
+const SESSION_CRYPTO_ERROR_LOG_INTERVAL_MS = positiveNumberFromEnv("WA_SESSION_ERROR_LOG_INTERVAL_MS", 60_000);
 
 function fireAndForget(task, onError) {
   Promise.resolve(task()).catch(onError);
@@ -53,10 +53,6 @@ function isSessionCryptoError(args) {
   );
 }
 
-function safeTimestamp() {
-  return new Date().toISOString().replace(/[:.]/g, "-");
-}
-
 async function getBaileysModule() {
   if (baileysModuleCache) {
     return baileysModuleCache;
@@ -78,8 +74,7 @@ class ClientManager {
     this.clients = new Map();
     this.pendingInitializations = new Map();
     this.sessionCryptoErrors = new Map();
-    this.quarantinedUsers = new Set();
-    this.quarantiningUsers = new Set();
+    this.sessionCryptoLastLoggedAt = new Map();
   }
 
   getSessionPath(userId) {
@@ -97,10 +92,8 @@ class ClientManager {
     const directory = sessionPath || this.getSessionPath(userId);
 
     if (allowPairing) {
-      this.quarantinedUsers.delete(userKey);
       this.sessionCryptoErrors.delete(userKey);
-    } else if (this.quarantinedUsers.has(userKey)) {
-      throw new Error("WhatsApp session is quarantined and requires QR reconnect");
+      this.sessionCryptoLastLoggedAt.delete(userKey);
     }
 
     if (!allowPairing && !fs.existsSync(path.join(directory, "creds.json"))) {
@@ -217,10 +210,6 @@ class ClientManager {
 
             logger.warn({ userId, reasonCode }, "WhatsApp client disconnected");
 
-            if (this.quarantinedUsers.has(userKey)) {
-              return;
-            }
-
             if (isLoggedOut) {
               try {
                 // Logged-out creds are invalid; reset session files so next init produces a fresh QR.
@@ -267,7 +256,11 @@ class ClientManager {
       fatal: (...args) => targetLogger.fatal(...args),
       error: (...args) => {
         if (isSessionCryptoError(args)) {
-          this.recordSessionCryptoError(userId, clientId, args);
+          this.recordSessionCryptoError(userId, clientId);
+          // Bad MAC/decrypt errors belong to a remote contact's Signal session.
+          // Baileys can recover that session itself; forwarding every stack trace
+          // floods PM2 logs and previously caused the whole bot session to reset.
+          return;
         }
         targetLogger.error(...args);
       },
@@ -277,91 +270,29 @@ class ClientManager {
     return wrap(baseLogger);
   }
 
-  recordSessionCryptoError(userId, clientId, args) {
+  recordSessionCryptoError(userId, clientId) {
     const userKey = String(userId);
-    if (this.quarantinedUsers.has(userKey) || this.quarantiningUsers.has(userKey)) {
-      return;
-    }
-
     const now = Date.now();
     const recent = (this.sessionCryptoErrors.get(userKey) || [])
       .filter((timestamp) => now - timestamp <= SESSION_CRYPTO_ERROR_WINDOW_MS);
     recent.push(now);
     this.sessionCryptoErrors.set(userKey, recent);
 
-    if (recent.length < SESSION_CRYPTO_ERROR_LIMIT) {
-      logger.warn(
-        { userId, clientId, count: recent.length, limit: SESSION_CRYPTO_ERROR_LIMIT },
-        "WhatsApp session crypto error recorded"
-      );
+    const lastLoggedAt = this.sessionCryptoLastLoggedAt.get(userKey) || 0;
+    if (now - lastLoggedAt < SESSION_CRYPTO_ERROR_LOG_INTERVAL_MS) {
       return;
     }
 
-    logger.error(
-      { userId, clientId, count: recent.length, sample: args.map(normalizeLogArg).join(" ") },
-      "WhatsApp session exceeded crypto error limit; quarantining session"
+    this.sessionCryptoLastLoggedAt.set(userKey, now);
+    logger.warn(
+      {
+        userId,
+        clientId,
+        count: recent.length,
+        windowMs: SESSION_CRYPTO_ERROR_WINDOW_MS
+      },
+      "WhatsApp contact decrypt errors detected; allowing Baileys to recover the remote session"
     );
-
-    fireAndForget(
-      () => this.quarantineClientSession(userId, clientId, "Repeated WhatsApp crypto errors"),
-      (err) => logger.error({ err, userId, clientId }, "WhatsApp session quarantine failed")
-    );
-  }
-
-  async quarantineClientSession(userId, clientId, reason) {
-    const userKey = String(userId);
-    if (this.quarantiningUsers.has(userKey) || this.quarantinedUsers.has(userKey)) {
-      return;
-    }
-
-    this.quarantiningUsers.add(userKey);
-    this.quarantinedUsers.add(userKey);
-
-    try {
-      const existing = this.clients.get(userKey);
-      if (existing?.sock) {
-        try {
-          existing.sock.end?.(new Error(reason));
-        } catch (err) {
-          logger.warn({ err, userId, clientId }, "Failed to end quarantined WhatsApp socket");
-        }
-
-        try {
-          existing.sock.ws?.close?.();
-        } catch (err) {
-          logger.warn({ err, userId, clientId }, "Failed to close quarantined WhatsApp websocket");
-        }
-      }
-
-      this.clients.delete(userKey);
-      this.pendingInitializations.delete(userKey);
-      this.sessionCryptoErrors.delete(userKey);
-
-      const directory = existing?.sessionPath || this.getSessionPath(userId);
-      let quarantinedPath = null;
-      if (fs.existsSync(directory)) {
-        const disabledRoot = path.join(process.cwd(), "sessions_disabled");
-        fs.mkdirSync(disabledRoot, { recursive: true });
-        quarantinedPath = path.join(disabledRoot, `user-${userId}-${safeTimestamp()}`);
-        fs.renameSync(directory, quarantinedPath);
-      }
-
-      await clientRepository.updateStatusByUserId(userId, CLIENT_STATUS.DISCONNECTED);
-      emitToUser(userId, "client:disconnected", {
-        status: CLIENT_STATUS.DISCONNECTED,
-        message: "WhatsApp session was reset. Scan QR again to reconnect."
-      });
-      emitToUser(userId, "client:error", {
-        message: "WhatsApp session was reset after repeated encryption errors. Scan QR again."
-      });
-
-      logger.error(
-        { userId, clientId, reason, quarantinedPath },
-        "WhatsApp session quarantined"
-      );
-    } finally {
-      this.quarantiningUsers.delete(userKey);
-    }
   }
 
   resetSessionFiles(userId, sessionPath) {
@@ -387,8 +318,8 @@ class ClientManager {
       fs.rmSync(directory, { recursive: true, force: true });
     }
     fs.mkdirSync(directory, { recursive: true });
-    this.quarantinedUsers.delete(userKey);
     this.sessionCryptoErrors.delete(userKey);
+    this.sessionCryptoLastLoggedAt.delete(userKey);
   }
 
   async logoutClient(userId) {

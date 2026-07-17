@@ -5,7 +5,8 @@ const { logger } = require("./src/config/logger");
 const { query } = require("./src/config/database");
 const { ensureDefaultAdmin } = require("./src/services/bootstrapService");
 const { clientManager } = require("./src/baileys/clientManager");
-const { startWorker } = require("./src/services/bulkWorker");
+const { startWorker, stopWorker } = require("./src/services/bulkWorker");
+const { pool } = require("./src/config/database");
 
 const PORT = Number(process.env.PORT || 4000);
 const server = http.createServer(app);
@@ -30,3 +31,34 @@ startServer().catch((err) => {
   logger.error({ err }, "Failed to start server");
   process.exit(1);
 });
+
+function gracefulShutdown() {
+  logger.info("Received shutdown signal. Stopping worker and server...");
+  stopWorker();
+  
+  // Close Baileys sockets
+  for (const [userId, client] of clientManager.clients.entries()) {
+    try {
+      client.sock?.end?.(new Error("Server shutting down"));
+      client.sock?.ws?.close?.();
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  server.close(() => {
+    logger.info("HTTP server closed.");
+    pool.end().then(() => {
+      logger.info("Database pool closed.");
+      process.exit(0);
+    });
+  });
+
+  setTimeout(() => {
+    logger.error("Forcefully shutting down...");
+    process.exit(1);
+  }, 10000);
+}
+
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);

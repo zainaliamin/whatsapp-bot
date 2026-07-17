@@ -3,7 +3,7 @@ const { asyncHandler } = require("../utils/asyncHandler");
 const { sendSuccess } = require("../utils/response");
 
 const sendText = asyncHandler(async (req, res) => {
-  const userId = req.apiUser?.userId || req.user?.id || req.apiUser?.id;
+  const userId = req.apiUser?.userId ?? req.user?.id ?? req.apiUser?.id;
   const data = await messageService.sendTextMessage({
     userId,
     recipientNumber: req.body.recipientNumber,
@@ -15,7 +15,7 @@ const sendText = asyncHandler(async (req, res) => {
 });
 
 const sendImage = asyncHandler(async (req, res) => {
-  const userId = req.apiUser?.userId || req.user?.id || req.apiUser?.id;
+  const userId = req.apiUser?.userId ?? req.user?.id ?? req.apiUser?.id;
   const data = await messageService.sendImageMessage({
     userId,
     recipientNumber: req.body.recipientNumber,

@@ -10,6 +10,16 @@ const enqueue = asyncHandler(async (req, res) => {
     return sendError(res, "Messages array is required", 400);
   }
 
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg.recipientNumber) {
+      return sendError(res, `Message at index ${i} is missing recipientNumber`, 400);
+    }
+    if (!msg.messageText && !msg.mediaUrl) {
+      return sendError(res, `Message at index ${i} must have messageText or mediaUrl`, 400);
+    }
+  }
+
   // Insert messages into queue
   const values = messages.map(msg => [
     userId,
@@ -66,21 +76,25 @@ const getStats = asyncHandler(async (req, res) => {
   });
 
   const statusQuery = await query(`
-    SELECT status, next_send_time, send_interval_minutes
+    SELECT status, next_send_time, send_interval_min_minutes, send_interval_max_minutes
     FROM bulk_queue_status 
     WHERE user_id = ?
   `, [userId]);
 
   const queueStatus = statusQuery.length > 0 ? statusQuery[0].status : 'PAUSED';
   const nextSendTime = statusQuery.length > 0 ? statusQuery[0].next_send_time : null;
-  const sendIntervalMinutes = statusQuery.length > 0
-    ? Number(statusQuery[0].send_interval_minutes || 1)
+  const sendIntervalMinMinutes = statusQuery.length > 0
+    ? Number(statusQuery[0].send_interval_min_minutes || 1)
+    : 1;
+  const sendIntervalMaxMinutes = statusQuery.length > 0
+    ? Number(statusQuery[0].send_interval_max_minutes || 1)
     : 1;
 
   return sendSuccess(res, "Bulk stats fetched", {
     queueStatus,
     nextSendTime,
-    sendIntervalMinutes,
+    sendIntervalMinMinutes,
+    sendIntervalMaxMinutes,
     ...stats
   });
 });
@@ -144,19 +158,23 @@ const clearPending = asyncHandler(async (req, res) => {
 
 const setSendInterval = asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const intervalMinutes = Number(req.body?.intervalMinutes);
+  const intervalMin = Number(req.body?.intervalMin);
+  const intervalMax = Number(req.body?.intervalMax);
 
-  if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440) {
-    return sendError(res, "Interval must be a whole number between 1 and 1440 minutes", 400);
+  if (!Number.isInteger(intervalMin) || intervalMin < 1 || intervalMin > 1440) {
+    return sendError(res, "intervalMin must be a whole number between 1 and 1440 minutes", 400);
+  }
+  if (!Number.isInteger(intervalMax) || intervalMax < intervalMin || intervalMax > 1440) {
+    return sendError(res, "intervalMax must be a whole number between intervalMin and 1440 minutes", 400);
   }
 
   await query(`
-    INSERT INTO bulk_queue_status (user_id, status, send_interval_minutes)
-    VALUES (?, 'PAUSED', ?)
-    ON DUPLICATE KEY UPDATE send_interval_minutes = ?
-  `, [userId, intervalMinutes, intervalMinutes]);
+    INSERT INTO bulk_queue_status (user_id, status, send_interval_min_minutes, send_interval_max_minutes)
+    VALUES (?, 'PAUSED', ?, ?)
+    ON DUPLICATE KEY UPDATE send_interval_min_minutes = ?, send_interval_max_minutes = ?
+  `, [userId, intervalMin, intervalMax, intervalMin, intervalMax]);
 
-  return sendSuccess(res, "Bulk send interval updated", { intervalMinutes });
+  return sendSuccess(res, "Bulk send interval updated", { intervalMin, intervalMax });
 });
 
 const requeueFailed = asyncHandler(async (req, res) => {

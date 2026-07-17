@@ -122,8 +122,9 @@ class ClientManager {
     }
   }
 
-  async _initClient(userId, clientId, directory) {
+  async _initClient(userId, clientId, directory, options = {}) {
     const {
+
       makeWASocket,
       useMultiFileAuthState,
       DisconnectReason,
@@ -170,9 +171,8 @@ class ClientManager {
           }
 
           if (connection === "connecting") {
-            await clientRepository.updateStatusByUserId(userId, CLIENT_STATUS.CONNECTED);
             emitToUser(userId, "client:connected", {
-              status: CLIENT_STATUS.CONNECTED,
+              status: "CONNECTING",
               message: "WhatsApp connecting"
             });
           }
@@ -237,6 +237,27 @@ class ClientManager {
           logger.error({ err, userId, clientId, update }, "WhatsApp connection update handling failed");
           emitToUser(userId, "client:error", { message: "Client event handling failed" });
         }
+      );
+    });
+
+    sock.ev.on("messages.upsert", (m) => {
+      fireAndForget(
+        async () => {
+          if (!m.messages || m.messages.length === 0) return;
+          for (const msg of m.messages) {
+            if (!msg.key.fromMe) {
+              // Simulate human reading time (2-5s)
+              await new Promise((resolve) => setTimeout(resolve, 2000 + Math.random() * 3000));
+              try {
+                await sock.readMessages([msg.key]);
+                logger.debug({ userId, msgId: msg.key.id }, "Sent read receipt");
+              } catch (err) {
+                logger.warn({ err, userId }, "Failed to send read receipt");
+              }
+            }
+          }
+        },
+        (err) => logger.error({ err, userId }, "Message upsert handling failed")
       );
     });
 

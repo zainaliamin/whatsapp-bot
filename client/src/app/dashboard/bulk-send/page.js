@@ -17,7 +17,8 @@ export default function BulkSendPage() {
   const [statusMessagesLoading, setStatusMessagesLoading] = useState(false);
   const [statusMessagesError, setStatusMessagesError] = useState("");
   const [retryingFailed, setRetryingFailed] = useState(false);
-  const [sendIntervalMinutes, setSendIntervalMinutes] = useState(1);
+  const [sendIntervalMinMinutes, setSendIntervalMinMinutes] = useState(1);
+  const [sendIntervalMaxMinutes, setSendIntervalMaxMinutes] = useState(1);
   const [savingInterval, setSavingInterval] = useState(false);
   
   const [stats, setStats] = useState({
@@ -26,7 +27,8 @@ export default function BulkSendPage() {
     FAILED: 0,
     queueStatus: "PAUSED",
     nextSendTime: null,
-    sendIntervalMinutes: 1
+    sendIntervalMinMinutes: 1,
+    sendIntervalMaxMinutes: 1
   });
 
   const fileInputRef = useRef(null);
@@ -46,7 +48,8 @@ export default function BulkSendPage() {
         if (data.success) {
           setStats(data.data);
           if (!intervalInitializedRef.current) {
-            setSendIntervalMinutes(Number(data.data.sendIntervalMinutes || 1));
+            setSendIntervalMinMinutes(Number(data.data.sendIntervalMinMinutes || 1));
+            setSendIntervalMaxMinutes(Number(data.data.sendIntervalMaxMinutes || 1));
             intervalInitializedRef.current = true;
           }
         }
@@ -179,9 +182,14 @@ export default function BulkSendPage() {
   };
 
   const saveSendInterval = async () => {
-    const intervalMinutes = Number.parseInt(sendIntervalMinutes, 10);
-    if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440) {
-      setFeedback("Please enter a whole number from 1 to 1440 minutes.");
+    const intervalMin = Number.parseInt(sendIntervalMinMinutes, 10);
+    const intervalMax = Number.parseInt(sendIntervalMaxMinutes, 10);
+    if (!Number.isInteger(intervalMin) || intervalMin < 1 || intervalMin > 1440) {
+      setFeedback("Please enter a whole number from 1 to 1440 for minimum minutes.");
+      return;
+    }
+    if (!Number.isInteger(intervalMax) || intervalMax < intervalMin || intervalMax > 1440) {
+      setFeedback("Maximum minutes must be a whole number between minimum and 1440.");
       return;
     }
 
@@ -190,15 +198,16 @@ export default function BulkSendPage() {
     try {
       const res = await apiFetch("/api/bulk/interval", {
         method: "POST",
-        body: JSON.stringify({ intervalMinutes })
+        body: JSON.stringify({ intervalMin, intervalMax })
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.message || "Unable to save the send interval.");
       }
 
-      setSendIntervalMinutes(intervalMinutes);
-      setFeedback(`Messages will be sent ${intervalMinutes} minute${intervalMinutes === 1 ? "" : "s"} apart.`);
+      setSendIntervalMinMinutes(intervalMin);
+      setSendIntervalMaxMinutes(intervalMax);
+      setFeedback(`Messages will be sent randomly between ${intervalMin} to ${intervalMax} minute(s) apart.`);
       fetchStats();
     } catch (e) {
       setFeedback(e.message || "Unable to save the send interval.");
@@ -284,15 +293,27 @@ export default function BulkSendPage() {
           </div>
           <div className="flex flex-wrap items-end gap-2">
             <label className="block">
-              <span className="mb-1 block text-xs font-medium text-gray-600">Minutes between messages</span>
+              <span className="mb-1 block text-xs font-medium text-gray-600">Min Minutes</span>
               <input
                 type="number"
                 min="1"
                 max="1440"
                 step="1"
-                value={sendIntervalMinutes}
-                onChange={(e) => setSendIntervalMinutes(e.target.value)}
-                className="w-28 rounded-xl border border-(--line) px-3 py-2 text-sm outline-none focus:border-(--brand)"
+                value={sendIntervalMinMinutes}
+                onChange={(e) => setSendIntervalMinMinutes(e.target.value)}
+                className="w-24 rounded-xl border border-(--line) px-3 py-2 text-sm outline-none focus:border-(--brand)"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-gray-600">Max Minutes</span>
+              <input
+                type="number"
+                min="1"
+                max="1440"
+                step="1"
+                value={sendIntervalMaxMinutes}
+                onChange={(e) => setSendIntervalMaxMinutes(e.target.value)}
+                className="w-24 rounded-xl border border-(--line) px-3 py-2 text-sm outline-none focus:border-(--brand)"
               />
             </label>
             <button onClick={saveSendInterval} disabled={savingInterval} className="rounded-xl border border-(--line) bg-white px-4 py-2 text-sm font-semibold text-(--brand) transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60">

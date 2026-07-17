@@ -223,6 +223,52 @@ async function ensureReadyClient(userId) {
   return { client, sock: managed.sock };
 }
 
+function humanDelay(textLength) {
+  const base = 800 + Math.random() * 600;
+  const perChar = textLength * (8 + Math.random() * 6);
+  const jitter = (Math.random() - 0.5) * 0.3;
+  const delay = (base + perChar) * (1 + jitter);
+  return Math.min(Math.max(delay, 600), 6000);
+}
+
+function humanImageDelay() {
+  return 2000 + Math.random() * 2000;
+}
+
+async function simulateTypingAndSend(sock, jid, action, delayMs = 1500) {
+  // Set status to online (available)
+  await sock.sendPresenceUpdate("available").catch((err) => {
+    logger.warn({ err, jid }, "Failed to set presence to available");
+  });
+  
+  // Random pre-typing online period (0-2s)
+  await sleep(Math.random() * 2000);
+
+  // Set presence to composing (typing...)
+  await sock.sendPresenceUpdate("composing", jid).catch((err) => {
+    logger.warn({ err, jid }, "Failed to set presence to composing");
+  });
+
+  // Short delay to simulate natural typing
+  await sleep(delayMs);
+
+  try {
+    const result = await action();
+    // Random post-send online period (0-1.5s)
+    await sleep(Math.random() * 1500);
+    return result;
+  } finally {
+    // Stop the typing indicator
+    await sock.sendPresenceUpdate("paused", jid).catch((err) => {
+      logger.warn({ err, jid }, "Failed to set presence to paused");
+    });
+    // Set status back to offline (unavailable)
+    await sock.sendPresenceUpdate("unavailable").catch((err) => {
+      logger.warn({ err, jid }, "Failed to set presence to unavailable");
+    });
+  }
+}
+
 async function sendTextMessage({ userId, recipientNumber, messageText, sourceApplication }) {
   const { client, sock } = await ensureReadyClient(userId);
 
@@ -243,7 +289,10 @@ async function sendTextMessage({ userId, recipientNumber, messageText, sourceApp
       recipientNumber,
       messageLogId: messageLog.id
     });
-    const result = await sock.sendMessage(jid, { text: messageText });
+
+    const result = await simulateTypingAndSend(sock, jid, async () => {
+      return await sock.sendMessage(jid, { text: messageText });
+    }, humanDelay(messageText.length));
 
     await messageRepository.updateMessageStatus(messageLog.id, MESSAGE_STATUS.SENT);
 
@@ -287,10 +336,13 @@ async function sendImageMessage({ userId, recipientNumber, imageUrl, caption, so
       recipientNumber,
       messageLogId: messageLog.id
     });
-    const result = await sock.sendMessage(jid, {
-      image: { url: imageUrl },
-      caption: caption || ""
-    });
+
+    const result = await simulateTypingAndSend(sock, jid, async () => {
+      return await sock.sendMessage(jid, {
+        image: { url: imageUrl },
+        caption: caption || ""
+      });
+    }, humanImageDelay());
 
     await messageRepository.updateMessageStatus(messageLog.id, MESSAGE_STATUS.SENT);
 

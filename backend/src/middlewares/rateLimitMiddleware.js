@@ -17,7 +17,7 @@ const messageRateLimiter = rateLimit({
   max: 70,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => String(req.apiUser?.id || req.user?.id || req.ip),
+  keyGenerator: (req) => String(req.apiUser?.userId || req.user?.id || req.ip),
   message: {
     success: false,
     message: "Rate limit exceeded: maximum 70 messages per minute",

@@ -27,8 +27,8 @@ async function cleanupExpiredTerminalMessages() {
   const result = await query(`
     DELETE FROM bulk_message_queue
     WHERE status IN ('SENT', 'FAILED')
-      AND updated_at < DATE_SUB(NOW(), INTERVAL ${TERMINAL_MESSAGE_RETENTION_DAYS} DAY)
-  `);
+      AND updated_at < DATE_SUB(NOW(), INTERVAL ? DAY)
+  `, [TERMINAL_MESSAGE_RETENTION_DAYS]);
 
   if (result.affectedRows > 0) {
     logger.info({ deletedCount: result.affectedRows }, "Deleted expired bulk message records");
@@ -55,7 +55,7 @@ const processQueue = async () => {
 
     // 1. Find all active users whose next_send_time is null or in the past
     const activeUsers = await query(`
-      SELECT user_id, send_interval_minutes
+      SELECT user_id, send_interval_min_minutes, send_interval_max_minutes
       FROM bulk_queue_status 
       WHERE status = 'ACTIVE' 
       AND (next_send_time IS NULL OR next_send_time <= NOW())
@@ -66,30 +66,50 @@ const processQueue = async () => {
     }
 
     // 2. Process one message for each active user concurrently
-    const promises = activeUsers.map(user => processNextMessageForUser(user.user_id, user.send_interval_minutes));
+    const promises = activeUsers.map(user => processNextMessageForUser(user.user_id, user.send_interval_min_minutes, user.send_interval_max_minutes));
     await Promise.allSettled(promises);
   } catch (error) {
     logger.error({ err: error }, "Error in bulk worker processQueue");
   }
 };
 
-const processNextMessageForUser = async (userId, sendIntervalMinutes = 1) => {
+const processNextMessageForUser = async (userId, minMins = 1, maxMins = 1) => {
   try {
-    // Lock the next message to prevent double sending (in a simpler implementation we just fetch 1 pending)
-    const pendingMessages = await query(`
-      SELECT id, recipient_number, message_text, media_url, caption 
-      FROM bulk_message_queue 
+    // Check expiry
+    const userRows = await query('SELECT message_expiry_date FROM users WHERE id = ?', [userId]);
+    if (userRows.length > 0 && userRows[0].message_expiry_date) {
+      if (new Date(userRows[0].message_expiry_date) < new Date()) {
+        await query(`UPDATE bulk_queue_status SET status = 'PAUSED' WHERE user_id = ?`, [userId]);
+        return;
+      }
+    }
+
+    // Lock the next message to prevent double sending
+    const updateResult = await query(`
+      UPDATE bulk_message_queue 
+      SET status = 'SENDING' 
       WHERE user_id = ? AND status = 'PENDING' 
       ORDER BY id ASC LIMIT 1
     `, [userId]);
 
-    if (!pendingMessages || pendingMessages.length === 0) {
+    if (updateResult.affectedRows === 0) {
       // Queue is empty, pause the user automatically
       await query(`UPDATE bulk_queue_status SET status = 'PAUSED' WHERE user_id = ?`, [userId]);
       return;
     }
 
-    const msg = pendingMessages[0];
+    const lockedMessages = await query(`
+      SELECT id, recipient_number, message_text, media_url, caption 
+      FROM bulk_message_queue 
+      WHERE user_id = ? AND status = 'SENDING' 
+      ORDER BY id ASC LIMIT 1
+    `, [userId]);
+
+    if (!lockedMessages || lockedMessages.length === 0) {
+      return;
+    }
+
+    const msg = lockedMessages[0];
 
     // Attempt to send
     try {
@@ -116,10 +136,20 @@ const processNextMessageForUser = async (userId, sendIntervalMinutes = 1) => {
       await query(`UPDATE bulk_message_queue SET status = 'FAILED', error_message = ? WHERE id = ?`, [getBulkSendErrorMessage(sendError), msg.id]);
     }
 
-    // Each user controls their own delay in whole minutes (1 minute to 24 hours).
-    const intervalMinutes = Math.min(Math.max(Number.parseInt(sendIntervalMinutes, 10) || 1, 1), 1440);
-    const delaySeconds = intervalMinutes * 60;
-    await query(`UPDATE bulk_queue_status SET next_send_time = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE user_id = ?`, [delaySeconds, userId]);
+    // Each user controls their own delay in whole minutes.
+    const min = Math.min(Math.max(Number.parseInt(minMins, 10) || 1, 1), 1440);
+    const max = Math.min(Math.max(Number.parseInt(maxMins, 10) || min, min), 1440);
+    
+    // Choose a random interval between min and max (inclusive of min, up to max)
+    const intervalMinutes = min + Math.random() * (max - min);
+    
+    // Add optional random "rest periods" — e.g. every 10th message add an extra 2-5 minutes
+    let delaySeconds = intervalMinutes * 60;
+    if (Math.random() < 0.1) { // 10% chance for a rest period
+      delaySeconds += (120 + Math.random() * 180); // add 2-5 minutes
+    }
+    
+    await query(`UPDATE bulk_queue_status SET next_send_time = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE user_id = ?`, [Math.round(delaySeconds), userId]);
 
   } catch (error) {
     logger.error({ err: error, userId }, "Error processing message for user in bulk worker");

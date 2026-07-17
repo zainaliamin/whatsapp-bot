@@ -239,28 +239,6 @@ class ClientManager {
         }
       );
     });
-
-    sock.ev.on("messages.upsert", (m) => {
-      fireAndForget(
-        async () => {
-          if (!m.messages || m.messages.length === 0) return;
-          for (const msg of m.messages) {
-            if (!msg.key.fromMe) {
-              // Simulate human reading time (2-5s)
-              await new Promise((resolve) => setTimeout(resolve, 2000 + Math.random() * 3000));
-              try {
-                await sock.readMessages([msg.key]);
-                logger.debug({ userId, msgId: msg.key.id }, "Sent read receipt");
-              } catch (err) {
-                logger.warn({ err, userId }, "Failed to send read receipt");
-              }
-            }
-          }
-        },
-        (err) => logger.error({ err, userId }, "Message upsert handling failed")
-      );
-    });
-
     return { userId, clientId, sessionPath: directory };
   }
 

@@ -85,11 +85,11 @@ const getStats = asyncHandler(async (req, res) => {
   const queueStatus = statusQuery.length > 0 ? statusQuery[0].status : 'PAUSED';
   const nextSendTime = statusQuery.length > 0 ? statusQuery[0].next_send_time : null;
   const sendIntervalMinMinutes = statusQuery.length > 0
-    ? Number(statusQuery[0].send_interval_min_minutes || 1)
-    : 1;
+    ? Number(statusQuery[0].send_interval_min_minutes || 2)
+    : 2;
   const sendIntervalMaxMinutes = statusQuery.length > 0
-    ? Number(statusQuery[0].send_interval_max_minutes || 1)
-    : 1;
+    ? Number(statusQuery[0].send_interval_max_minutes || 5)
+    : 5;
 
   return sendSuccess(res, "Bulk stats fetched", {
     queueStatus,

@@ -17,8 +17,8 @@ export default function BulkSendPage() {
   const [statusMessagesLoading, setStatusMessagesLoading] = useState(false);
   const [statusMessagesError, setStatusMessagesError] = useState("");
   const [retryingFailed, setRetryingFailed] = useState(false);
-  const [sendIntervalMinMinutes, setSendIntervalMinMinutes] = useState(1);
-  const [sendIntervalMaxMinutes, setSendIntervalMaxMinutes] = useState(1);
+  const [sendIntervalMinMinutes, setSendIntervalMinMinutes] = useState(2);
+  const [sendIntervalMaxMinutes, setSendIntervalMaxMinutes] = useState(5);
   const [savingInterval, setSavingInterval] = useState(false);
   
   const [stats, setStats] = useState({
@@ -28,8 +28,8 @@ export default function BulkSendPage() {
     FAILED: 0,
     queueStatus: "PAUSED",
     nextSendTime: null,
-    sendIntervalMinMinutes: 1,
-    sendIntervalMaxMinutes: 1
+    sendIntervalMinMinutes: 2,
+    sendIntervalMaxMinutes: 5
   });
 
   const fileInputRef = useRef(null);
@@ -49,8 +49,8 @@ export default function BulkSendPage() {
         if (data.success) {
           setStats(data.data);
           if (!intervalInitializedRef.current) {
-            setSendIntervalMinMinutes(Number(data.data.sendIntervalMinMinutes || 1));
-            setSendIntervalMaxMinutes(Number(data.data.sendIntervalMaxMinutes || 1));
+            setSendIntervalMinMinutes(Number(data.data.sendIntervalMinMinutes || 2));
+            setSendIntervalMaxMinutes(Number(data.data.sendIntervalMaxMinutes || 5));
             intervalInitializedRef.current = true;
           }
         }

@@ -44,7 +44,7 @@ async function countActiveClients() {
   const rows = await query(
     `SELECT COUNT(*) AS total
      FROM clients
-     WHERE status IN ('CONNECTED', 'READY')`
+     WHERE status = 'READY'`
   );
   return Number(rows[0]?.total || 0);
 }
@@ -53,7 +53,7 @@ async function listRecoverableClients() {
   return query(
     `SELECT id, user_id AS userId, status, session_path AS sessionPath, created_at AS createdAt
      FROM clients
-     WHERE status IN ('CONNECTED', 'READY')
+     WHERE status = 'READY'
        AND session_path IS NOT NULL`
   );
 }

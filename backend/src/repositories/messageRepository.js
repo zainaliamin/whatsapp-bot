@@ -59,13 +59,15 @@ async function getMessagesByUser(userId, limit = 100) {
 async function getUserMessageStats(userId) {
   const rows = await query(
     `SELECT
-        COUNT(*) AS totalSent,
+        SUM(CASE WHEN message_status = 'SENT' THEN 1 ELSE 0 END) AS totalSent,
         SUM(CASE
               WHEN YEAR(created_at) = YEAR(CURDATE())
                AND MONTH(created_at) = MONTH(CURDATE())
+               AND message_status = 'SENT'
               THEN 1 ELSE 0 END) AS thisMonth,
         SUM(CASE
               WHEN DATE(created_at) = CURDATE()
+               AND message_status = 'SENT'
               THEN 1 ELSE 0 END) AS today
      FROM messages
      WHERE user_id = ?`,

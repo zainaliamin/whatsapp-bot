@@ -17,7 +17,8 @@ async function createClient(userId) {
     await clientRepository.updateStatusByUserId(userId, CLIENT_STATUS.CREATED);
     await clientManager.initClient(userId, existing.id, sessionPath, {
       allowPairing: true,
-      force: true
+      force: true,
+      resetAutoReconnectFailures: true
     });
 
     return {
@@ -33,7 +34,10 @@ async function createClient(userId) {
     sessionPath
   });
 
-  await clientManager.initClient(userId, created.id, sessionPath, { allowPairing: true });
+  await clientManager.initClient(userId, created.id, sessionPath, {
+    allowPairing: true,
+    resetAutoReconnectFailures: true
+  });
 
   return {
     id: created.id,

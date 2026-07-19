@@ -17,6 +17,7 @@ function positiveNumberFromEnv(name, fallback) {
 
 const SESSION_CRYPTO_ERROR_WINDOW_MS = positiveNumberFromEnv("WA_SESSION_ERROR_WINDOW_MS", 60_000);
 const SESSION_CRYPTO_ERROR_LOG_INTERVAL_MS = positiveNumberFromEnv("WA_SESSION_ERROR_LOG_INTERVAL_MS", 60_000);
+const MAX_AUTO_RECONNECT_FAILURES = positiveNumberFromEnv("WA_MAX_AUTO_RECONNECT_FAILURES", 3);
 
 function fireAndForget(task, onError) {
   Promise.resolve(task()).catch(onError);
@@ -75,6 +76,8 @@ class ClientManager {
     this.pendingInitializations = new Map();
     this.sessionCryptoErrors = new Map();
     this.sessionCryptoLastLoggedAt = new Map();
+    this.autoReconnectFailures = new Map();
+    this.autoReconnectTimers = new Map();
   }
 
   getSessionPath(userId) {
@@ -87,9 +90,13 @@ class ClientManager {
   }
 
   async initClient(userId, clientId, sessionPath, options = {}) {
-    const { allowPairing = true, force = false } = options;
+    const { allowPairing = true, force = false, resetAutoReconnectFailures = false } = options;
     const userKey = String(userId);
     const directory = sessionPath || this.getSessionPath(userId);
+
+    if (resetAutoReconnectFailures) {
+      this.clearAutoReconnectState(userKey);
+    }
 
     if (allowPairing) {
       this.sessionCryptoErrors.delete(userKey);
@@ -172,7 +179,7 @@ class ClientManager {
 
           if (connection === "connecting") {
             emitToUser(userId, "client:connected", {
-              status: "CONNECTING",
+              status: CLIENT_STATUS.CONNECTED,
               message: "WhatsApp connecting"
             });
           }
@@ -180,6 +187,7 @@ class ClientManager {
           if (connection === "open") {
             await clientRepository.updateStatusByUserId(userId, CLIENT_STATUS.READY);
             const apiToken = await tokenService.getOrCreateUserToken(userId);
+            this.clearAutoReconnectState(userKey);
 
             logger.info({ userId, clientId }, "WhatsApp client ready");
             emitToUser(userId, "client:ready", {
@@ -201,28 +209,54 @@ class ClientManager {
 
             this.clients.delete(userKey);
 
+            const failureCount = this.recordAutoReconnectFailure(userKey);
+            const willRetry = failureCount < MAX_AUTO_RECONNECT_FAILURES;
+            const message = willRetry
+              ? (isLoggedOut ? "Logged out from WhatsApp. Reconnecting for new QR..." : "Connection closed")
+              : "WhatsApp reconnect stopped after repeated failures. Please reconnect manually.";
+
             // Keep DB status enum-compatible; runtime event can still signal LOGOUT.
             await clientRepository.updateStatusByUserId(userId, CLIENT_STATUS.DISCONNECTED);
             emitToUser(userId, "client:disconnected", {
               status: isLoggedOut ? CLIENT_STATUS.LOGOUT : CLIENT_STATUS.DISCONNECTED,
-              message: isLoggedOut ? "Logged out from WhatsApp. Reconnecting for new QR..." : "Connection closed"
+              message,
+              failureCount,
+              maxFailures: MAX_AUTO_RECONNECT_FAILURES,
+              willRetry
             });
 
-            logger.warn({ userId, reasonCode }, "WhatsApp client disconnected");
+            logger.warn(
+              { userId, reasonCode, failureCount, maxFailures: MAX_AUTO_RECONNECT_FAILURES, willRetry },
+              "WhatsApp client disconnected"
+            );
 
+            if (!willRetry) {
+              emitToUser(userId, "client:error", {
+                message,
+                failureCount,
+                maxFailures: MAX_AUTO_RECONNECT_FAILURES
+              });
+              return;
+            }
+
+            let cleanupOk = true;
             if (isLoggedOut) {
               try {
-                // Logged-out creds are invalid; reset session files so next init produces a fresh QR.
-                if (fs.existsSync(directory)) {
-                  fs.rmSync(directory, { recursive: true, force: true });
-                }
-                fs.mkdirSync(directory, { recursive: true });
+                this.resetSessionFiles(userId, directory);
               } catch (err) {
+                cleanupOk = false;
                 logger.error({ err, userId }, "Failed to reset session after logout");
               }
             }
 
-            setTimeout(() => {
+            if (!cleanupOk) {
+              logger.error({ userId }, "Aborting reconnection because session cleanup failed");
+              return;
+            }
+
+            this.clearAutoReconnectTimer(userKey);
+            const reconnectTimer = setTimeout(() => {
+              this.autoReconnectTimers.delete(userKey);
               this.initClient(userId, clientId, directory, {
                 allowPairing: isLoggedOut,
                 force: true
@@ -231,6 +265,7 @@ class ClientManager {
                 emitToUser(userId, "client:error", { message: "Reconnect failed" });
               });
             }, isLoggedOut ? 1200 : 3000);
+            this.autoReconnectTimers.set(userKey, reconnectTimer);
           }
         },
         (err) => {
@@ -244,6 +279,25 @@ class ClientManager {
 
   getClientByUserId(userId) {
     return this.clients.get(String(userId));
+  }
+
+  recordAutoReconnectFailure(userKey) {
+    const nextCount = (this.autoReconnectFailures.get(userKey) || 0) + 1;
+    this.autoReconnectFailures.set(userKey, nextCount);
+    return nextCount;
+  }
+
+  clearAutoReconnectTimer(userKey) {
+    const timer = this.autoReconnectTimers.get(userKey);
+    if (timer) {
+      clearTimeout(timer);
+      this.autoReconnectTimers.delete(userKey);
+    }
+  }
+
+  clearAutoReconnectState(userKey) {
+    this.clearAutoReconnectTimer(userKey);
+    this.autoReconnectFailures.delete(userKey);
   }
 
   createBaileysLogger(userId, clientId, baseLogger = logger.child({ class: "baileys", userId, clientId })) {
@@ -297,6 +351,9 @@ class ClientManager {
   resetSessionFiles(userId, sessionPath) {
     const userKey = String(userId);
     const existing = this.clients.get(userKey);
+    this.clients.delete(userKey);
+    this.clearAutoReconnectState(userKey);
+
     if (existing?.sock) {
       try {
         existing.sock.end?.(new Error("Resetting WhatsApp session"));
@@ -310,7 +367,6 @@ class ClientManager {
         logger.warn({ err, userId }, "Failed to close WhatsApp websocket during session reset");
       }
     }
-    this.clients.delete(userKey);
 
     const directory = sessionPath || this.getSessionPath(userId);
     if (fs.existsSync(directory)) {
@@ -322,24 +378,30 @@ class ClientManager {
   }
 
   async logoutClient(userId) {
-    const existing = this.clients.get(String(userId));
+    const userKey = String(userId);
+    const existing = this.clients.get(userKey);
+    this.clients.delete(userKey);
+    this.clearAutoReconnectState(userKey);
+
     if (!existing) {
       return;
     }
 
     await existing.sock.logout();
-    this.clients.delete(String(userId));
   }
 
   async removeClient(userId) {
-    const existing = this.clients.get(String(userId));
+    const userKey = String(userId);
+    const existing = this.clients.get(userKey);
+    this.clients.delete(userKey);
+    this.clearAutoReconnectState(userKey);
+
     if (existing) {
       try {
         await existing.sock.logout();
       } catch (_err) {
         // Ignore logout errors while deleting client.
       }
-      this.clients.delete(String(userId));
     }
 
     const dir = this.getSessionPath(userId);

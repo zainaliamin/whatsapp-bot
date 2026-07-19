@@ -23,6 +23,7 @@ export default function BulkSendPage() {
   
   const [stats, setStats] = useState({
     PENDING: 0,
+    SENDING: 0,
     SENT: 0,
     FAILED: 0,
     queueStatus: "PAUSED",
@@ -328,10 +329,15 @@ export default function BulkSendPage() {
           </div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-4">
           <button type="button" onClick={() => openStatusMessages("PENDING")} className="rounded-xl border border-(--line) bg-gray-50 p-4 text-left transition-colors hover:border-blue-300 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Pending</p>
             <p className="mt-1 text-2xl font-semibold text-blue-600">{stats.PENDING}</p>
+            <p className="mt-2 text-xs text-gray-500">View messages</p>
+          </button>
+          <button type="button" onClick={() => openStatusMessages("SENDING")} className="rounded-xl border border-(--line) bg-gray-50 p-4 text-left transition-colors hover:border-amber-300 hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-400">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Sending</p>
+            <p className="mt-1 text-2xl font-semibold text-amber-600">{stats.SENDING}</p>
             <p className="mt-2 text-xs text-gray-500">View messages</p>
           </button>
           <button type="button" onClick={() => openStatusMessages("SENT")} className="rounded-xl border border-(--line) bg-gray-50 p-4 text-left transition-colors hover:border-green-300 hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-green-400">

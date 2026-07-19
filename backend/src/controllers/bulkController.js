@@ -65,6 +65,7 @@ const getStats = asyncHandler(async (req, res) => {
 
   const stats = {
     PENDING: 0,
+    SENDING: 0,
     SENT: 0,
     FAILED: 0
   };
@@ -107,7 +108,7 @@ const getMessagesByStatus = asyncHandler(async (req, res) => {
     ? Math.min(Math.max(requestedLimit, 1), 200)
     : 100;
 
-  if (!["PENDING", "SENT", "FAILED"].includes(status)) {
+  if (!["PENDING", "SENDING", "SENT", "FAILED"].includes(status)) {
     return sendError(res, "A valid message status is required", 400);
   }
 

@@ -3,9 +3,11 @@ const messageService = require("./messageService");
 const { logger } = require("../config/logger");
 
 let workerInterval = null;
+let isProcessingQueue = false;
 let lastTerminalMessageCleanupAt = 0;
 const TERMINAL_MESSAGE_RETENTION_DAYS = 3;
 const CLEANUP_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+const STALE_SENDING_MINUTES = 10;
 
 function getBulkSendErrorMessage(error) {
   const message = error?.message || "WhatsApp send failed.";
@@ -50,6 +52,13 @@ const stopWorker = () => {
 };
 
 const processQueue = async () => {
+  if (isProcessingQueue) {
+    logger.debug("Skipping bulk worker tick because the previous tick is still running");
+    return;
+  }
+
+  isProcessingQueue = true;
+
   try {
     await cleanupExpiredTerminalMessages();
 
@@ -70,6 +79,8 @@ const processQueue = async () => {
     await Promise.allSettled(promises);
   } catch (error) {
     logger.error({ err: error }, "Error in bulk worker processQueue");
+  } finally {
+    isProcessingQueue = false;
   }
 };
 
@@ -77,12 +88,19 @@ const processNextMessageForUser = async (userId, minMins = 1, maxMins = 1) => {
   try {
     // Check expiry
     const userRows = await query('SELECT message_expiry_date FROM users WHERE id = ?', [userId]);
-    if (userRows.length > 0 && userRows[0].message_expiry_date) {
-      if (new Date(userRows[0].message_expiry_date) < new Date()) {
-        await query(`UPDATE bulk_queue_status SET status = 'PAUSED' WHERE user_id = ?`, [userId]);
-        return;
-      }
+    const messageExpiryDate = userRows[0]?.message_expiry_date;
+    if (!messageExpiryDate || new Date(messageExpiryDate) < new Date()) {
+      await query(`UPDATE bulk_queue_status SET status = 'PAUSED' WHERE user_id = ?`, [userId]);
+      return;
     }
+
+    await query(`
+      UPDATE bulk_message_queue
+      SET status = 'PENDING', error_message = NULL
+      WHERE user_id = ?
+        AND status = 'SENDING'
+        AND updated_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)
+    `, [userId, STALE_SENDING_MINUTES]);
 
     // Lock the next message to prevent double sending
     const updateResult = await query(`

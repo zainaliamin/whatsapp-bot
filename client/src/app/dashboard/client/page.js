@@ -46,6 +46,7 @@ export default function ClientPage() {
   const [clientData,  setClientData]  = useState(null);   // null = no client
   const [qrDataUrl,   setQrDataUrl]   = useState(null);   // base64 QR image
   const [liveStatus,  setLiveStatus]  = useState(null);   // updated by socket
+  const [willRetry,   setWillRetry]   = useState(false);  // true while auto-reconnect is in-flight
   const [loading,     setLoading]     = useState(true);
   const [actionMsg,   setActionMsg]   = useState({ text: "", ok: false });
   const [copyState,   setCopyState]   = useState("idle"); // idle | success | error
@@ -88,21 +89,31 @@ export default function ClientPage() {
       setLiveStatus(status ?? STATUS.QR_READY);
     });
 
-    socket.on("client:connected", ({ status }) => {
+    socket.on("client:connected", ({ status, message }) => {
       setLiveStatus(status ?? STATUS.CONNECTED);
+      setWillRetry(false);
+      if (message) setActionMsg({ text: message, ok: true });
     });
 
     socket.on("client:ready", ({ status, apiToken: tok }) => {
       setLiveStatus(status ?? STATUS.READY);
+      setWillRetry(false);
       setQrDataUrl(null);           // QR no longer needed
+      setActionMsg({ text: "WhatsApp client is ready.", ok: true });
       if (tok) setApiToken(tok);
       fetchApiToken();
       fetchStatus();
     });
 
-    socket.on("client:disconnected", ({ status }) => {
+    socket.on("client:disconnected", ({ status, message, willRetry: retry }) => {
       setLiveStatus(status ?? STATUS.DISCONNECTED);
+      setWillRetry(Boolean(retry));
       setQrDataUrl(null);
+      if (message) setActionMsg({ text: message, ok: Boolean(retry) });
+    });
+
+    socket.on("client:error", ({ message }) => {
+      setActionMsg({ text: message || "WhatsApp client error.", ok: false });
     });
 
     return () => {
@@ -120,6 +131,7 @@ export default function ClientPage() {
   // ── Actions ──────────────────────────────────────────────────────────────────
   async function clientAction(path, method, successMsg) {
     setActionMsg({ text: "", ok: false });
+    setWillRetry(false);          // user-initiated action overrides auto-reconnect state
     const r = await apiFetch(path, { method });
     const d = await r.json();
     if (r.ok && d.success) {
@@ -148,7 +160,8 @@ export default function ClientPage() {
   const currentStatus = liveStatus ?? clientData?.status;
   const isQrReady    = currentStatus === STATUS.QR_READY;
   const isReady      = currentStatus === STATUS.READY;
-  const canReconnect = hasClient && [STATUS.DISCONNECTED, STATUS.LOGOUT].includes(currentStatus);
+  const isAutoReconnecting = willRetry && [STATUS.DISCONNECTED, STATUS.LOGOUT, STATUS.CONNECTED].includes(currentStatus);
+  const canReconnect = hasClient && !willRetry && [STATUS.DISCONNECTED, STATUS.LOGOUT].includes(currentStatus);
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -260,6 +273,16 @@ export default function ClientPage() {
           >
             Logout Client
           </button>
+        )}
+
+        {!loading && isAutoReconnecting && (
+          <div className="flex items-center gap-2 rounded-full border border-amber-300 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-700">
+            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Reconnecting automatically…
+          </div>
         )}
 
         {!loading && canReconnect && (

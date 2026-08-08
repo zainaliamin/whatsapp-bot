@@ -129,6 +129,16 @@ const processNextMessageForUser = async (userId, minMins = 1, maxMins = 1) => {
 
     const msg = lockedMessages[0];
 
+    // Calculate delay and update next_send_time immediately to lock out concurrent worker ticks
+    const min = Math.min(Math.max(Number.parseInt(minMins, 10) || 1, 1), 1440);
+    const max = Math.min(Math.max(Number.parseInt(maxMins, 10) || min, min), 1440);
+    const intervalMinutes = min + Math.random() * (max - min);
+    let delaySeconds = intervalMinutes * 60;
+    if (Math.random() < 0.1) {
+      delaySeconds += (120 + Math.random() * 180);
+    }
+    await query(`UPDATE bulk_queue_status SET next_send_time = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE user_id = ?`, [Math.round(delaySeconds), userId]);
+
     // Attempt to send
     try {
       if (msg.media_url) {
@@ -153,21 +163,6 @@ const processNextMessageForUser = async (userId, minMins = 1, maxMins = 1) => {
       logger.error({ err: sendError, msgId: msg.id }, "Failed to send bulk message");
       await query(`UPDATE bulk_message_queue SET status = 'FAILED', error_message = ? WHERE id = ?`, [getBulkSendErrorMessage(sendError), msg.id]);
     }
-
-    // Each user controls their own delay in whole minutes.
-    const min = Math.min(Math.max(Number.parseInt(minMins, 10) || 1, 1), 1440);
-    const max = Math.min(Math.max(Number.parseInt(maxMins, 10) || min, min), 1440);
-    
-    // Choose a random interval between min and max (inclusive of min, up to max)
-    const intervalMinutes = min + Math.random() * (max - min);
-    
-    // Add optional random "rest periods" — e.g. every 10th message add an extra 2-5 minutes
-    let delaySeconds = intervalMinutes * 60;
-    if (Math.random() < 0.1) { // 10% chance for a rest period
-      delaySeconds += (120 + Math.random() * 180); // add 2-5 minutes
-    }
-    
-    await query(`UPDATE bulk_queue_status SET next_send_time = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE user_id = ?`, [Math.round(delaySeconds), userId]);
 
   } catch (error) {
     logger.error({ err: error, userId }, "Error processing message for user in bulk worker");

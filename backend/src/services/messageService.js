@@ -262,10 +262,6 @@ async function simulateTypingAndSend(sock, jid, action, delayMs = 1500) {
     await sock.sendPresenceUpdate("paused", jid).catch((err) => {
       logger.warn({ err, jid }, "Failed to set presence to paused");
     });
-    // Set status back to offline (unavailable)
-    await sock.sendPresenceUpdate("unavailable").catch((err) => {
-      logger.warn({ err, jid }, "Failed to set presence to unavailable");
-    });
   }
 }
 

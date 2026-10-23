@@ -1,0 +1,16 @@
+/*
+!/.gitignore
+!/htmltoimage/
+!/whatsapp-bot/
+
+node_modules/
+screenshots/
+.env
+.env.*
+!.env.example
+*.log
+
+/whatsapp-bot/backend/dependency-backup-*/
+/whatsapp-bot/backend/sessions/
+/whatsapp-bot/backend/sessions.backup-*/
+/whatsapp-bot/backend/sessions_disabled/

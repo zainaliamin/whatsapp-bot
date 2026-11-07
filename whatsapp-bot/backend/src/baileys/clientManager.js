@@ -3,6 +3,9 @@ const fs = require("fs");
 const QRCode = require("qrcode");
 
 const clientRepository = require("../repositories/clientRepository");
+const messageRetryRepository = require("../repositories/messageRetryRepository");
+const { createMessageRetryStore, readRetryRetentionSeconds } = require("./messageRetryStore");
+const { createRetryableSender } = require("./retryableSender");
 const tokenService = require("../services/tokenService");
 const { emitToUser } = require("../sockets/socketServer");
 const { logger } = require("../config/logger");
@@ -64,14 +67,22 @@ async function getBaileysModule() {
     makeWASocket: module.default,
     useMultiFileAuthState: module.useMultiFileAuthState,
     DisconnectReason: module.DisconnectReason,
-    fetchLatestBaileysVersion: module.fetchLatestBaileysVersion
+    fetchLatestBaileysVersion: module.fetchLatestBaileysVersion,
+    proto: module.proto,
+    jidNormalizedUser: module.jidNormalizedUser,
+    generateWAMessage: module.generateWAMessage,
+    generateMessageIDV2: module.generateMessageIDV2,
+    getUrlInfo: module.getUrlInfo,
+    DEFAULT_CONNECTION_CONFIG: module.DEFAULT_CONNECTION_CONFIG
   };
 
   return baileysModuleCache;
 }
 
 class ClientManager {
-  constructor() {
+  constructor({ loadBaileys = getBaileysModule, retryRepository = messageRetryRepository } = {}) {
+    this.loadBaileys = loadBaileys;
+    this.retryRepository = retryRepository;
     this.clients = new Map();
     this.pendingInitializations = new Map();
     this.sessionCryptoErrors = new Map();
@@ -130,13 +141,14 @@ class ClientManager {
   }
 
   async _initClient(userId, clientId, directory, options = {}) {
+    const baileys = await this.loadBaileys();
     const {
 
       makeWASocket,
       useMultiFileAuthState,
       DisconnectReason,
       fetchLatestBaileysVersion
-    } = await getBaileysModule();
+    } = baileys;
 
     if (!fs.existsSync(directory)) {
       fs.mkdirSync(directory, { recursive: true });
@@ -144,17 +156,32 @@ class ClientManager {
 
     const { state, saveCreds } = await useMultiFileAuthState(directory);
     const { version } = await fetchLatestBaileysVersion();
+    const baileysLogger = this.createBaileysLogger(userId, clientId);
+    const retentionSeconds = readRetryRetentionSeconds();
+    const retryStore = createMessageRetryStore({
+      userId,
+      clientId,
+      identityKey: state.creds.signedIdentityKey.public,
+      repository: this.retryRepository,
+      proto: baileys.proto,
+      jidNormalizedUser: baileys.jidNormalizedUser,
+      resolvePhoneNumber: (jid) => sock.onWhatsApp(jid),
+      logger: baileysLogger,
+      retentionSeconds
+    });
 
     const sock = makeWASocket({
       version,
       auth: state,
-      logger: this.createBaileysLogger(userId, clientId),
+      logger: baileysLogger,
+      getMessage: retryStore.getMessage,
       printQRInTerminal: false,
       markOnlineOnConnect: false
     });
 
     const userKey = String(userId);
-    this.clients.set(userKey, { sock, clientId, sessionPath: directory });
+    const sendMessage = createRetryableSender({ sock, store: retryStore, baileys, logger: baileysLogger });
+    this.clients.set(userKey, { sock, clientId, sessionPath: directory, sendMessage });
 
     sock.ev.on("creds.update", () => {
       fireAndForget(
@@ -433,4 +460,4 @@ class ClientManager {
 
 const clientManager = new ClientManager();
 
-module.exports = { clientManager };
+module.exports = { clientManager, ClientManager };

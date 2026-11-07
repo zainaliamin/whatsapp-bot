@@ -9,6 +9,15 @@ const { logger } = require("../config/logger");
 const AVAILABLE_NUMBER_CACHE_MONTHS = 6;
 const UNAVAILABLE_NUMBER_CACHE_DAYS = 15;
 
+async function markMessageFailed(messageId) {
+  try {
+    await messageRepository.updateMessageStatus(messageId, MESSAGE_STATUS.FAILED);
+  } catch (err) {
+    // A shared database outage must not replace the original send/storage error.
+    logger.error({ err, messageId }, "Recording failed WhatsApp message status failed");
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -90,7 +99,7 @@ async function ensureRecipientAvailable({ userId, sock, recipientNumber, message
   }
 
   if (messageLogId) {
-    await messageRepository.updateMessageStatus(messageLogId, MESSAGE_STATUS.FAILED);
+    await markMessageFailed(messageLogId);
   }
 
   throw new ApiError(422, "The recipient number is not registered on WhatsApp.", {
@@ -109,6 +118,13 @@ function getErrorMessage(err) {
 }
 
 function classifyKnownSendFailure(err, messageType) {
+  if (err?.code === "WHATSAPP_RETRY_STORAGE_FAILED") {
+    return {
+      statusCode: 503,
+      code: err.code,
+      message: "Message was not sent because WhatsApp retry storage is unavailable. Please try again later."
+    };
+  }
   const rawMessage = getErrorMessage(err);
   const message = rawMessage.toLowerCase();
 
@@ -220,7 +236,7 @@ async function ensureReadyClient(userId) {
     });
   }
 
-  return { client, sock: managed.sock };
+  return { client, sock: managed.sock, sendMessage: managed.sendMessage };
 }
 
 function humanDelay(textLength) {
@@ -266,7 +282,7 @@ async function simulateTypingAndSend(sock, jid, action, delayMs = 1500) {
 }
 
 async function sendTextMessage({ userId, recipientNumber, messageText, sourceApplication }) {
-  const { client, sock } = await ensureReadyClient(userId);
+  const { client, sock, sendMessage } = await ensureReadyClient(userId);
 
   const messageLog = await messageRepository.createMessage({
     userId,
@@ -287,7 +303,7 @@ async function sendTextMessage({ userId, recipientNumber, messageText, sourceApp
     });
 
     const result = await simulateTypingAndSend(sock, jid, async () => {
-      return await sock.sendMessage(jid, { text: messageText });
+      return await sendMessage(jid, { text: messageText }, messageLog.id);
     }, humanDelay(messageText.length));
 
     await messageRepository.updateMessageStatus(messageLog.id, MESSAGE_STATUS.SENT);
@@ -298,7 +314,7 @@ async function sendTextMessage({ userId, recipientNumber, messageText, sourceApp
       whatsappMessageId: result.key.id
     };
   } catch (err) {
-    await messageRepository.updateMessageStatus(messageLog.id, MESSAGE_STATUS.FAILED);
+    await markMessageFailed(messageLog.id);
     if (err instanceof ApiError) {
       throw err;
     }
@@ -313,7 +329,7 @@ async function sendTextMessage({ userId, recipientNumber, messageText, sourceApp
 }
 
 async function sendImageMessage({ userId, recipientNumber, imageUrl, caption, sourceApplication }) {
-  const { client, sock } = await ensureReadyClient(userId);
+  const { client, sock, sendMessage } = await ensureReadyClient(userId);
 
   const messageLog = await messageRepository.createMessage({
     userId,
@@ -334,10 +350,10 @@ async function sendImageMessage({ userId, recipientNumber, imageUrl, caption, so
     });
 
     const result = await simulateTypingAndSend(sock, jid, async () => {
-      return await sock.sendMessage(jid, {
+      return await sendMessage(jid, {
         image: { url: imageUrl },
         caption: caption || ""
-      });
+      }, messageLog.id);
     }, humanImageDelay());
 
     await messageRepository.updateMessageStatus(messageLog.id, MESSAGE_STATUS.SENT);
@@ -348,7 +364,7 @@ async function sendImageMessage({ userId, recipientNumber, imageUrl, caption, so
       whatsappMessageId: result.key.id
     };
   } catch (err) {
-    await messageRepository.updateMessageStatus(messageLog.id, MESSAGE_STATUS.FAILED);
+    await markMessageFailed(messageLog.id);
     if (err instanceof ApiError) {
       throw err;
     }

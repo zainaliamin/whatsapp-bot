@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "dev": "nodemon --config nodemon.json server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "sanity": "node scripts/sanity-check.cjs"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "6.7.24",
@@ -30,6 +32,6 @@
     "nodemon": "^3.1.9"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   }
 }

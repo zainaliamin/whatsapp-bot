@@ -7,15 +7,39 @@ const { ensureDefaultAdmin } = require("./src/services/bootstrapService");
 const { clientManager } = require("./src/baileys/clientManager");
 const { startWorker, stopWorker } = require("./src/services/bulkWorker");
 const { pool } = require("./src/config/database");
+const messageRetryRepository = require("./src/repositories/messageRetryRepository");
+const { readRetryRetentionSeconds } = require("./src/baileys/messageRetryStore");
 
 const PORT = Number(process.env.PORT || 4000);
 const server = http.createServer(app);
+let retryCleanupTimer;
+let retryCleanupRunning = false;
+
+async function cleanupExpiredMessageRetries() {
+  if (retryCleanupRunning) return;
+  retryCleanupRunning = true;
+  try {
+    // Bound each pass so cleanup cannot monopolize the shared database pool.
+    for (let batch = 0; batch < 10; batch += 1) {
+      if (await messageRetryRepository.deleteExpired() < 1000) break;
+    }
+  } catch (err) {
+    logger.error({ err }, "Cleaning up expired WhatsApp retry payloads failed");
+  } finally {
+    retryCleanupRunning = false;
+  }
+}
 
 initSocketServer(server);
 
 async function startServer() {
+  readRetryRetentionSeconds();
   await query("SELECT 1");
+  await messageRetryRepository.assertReady();
   await ensureDefaultAdmin();
+  await cleanupExpiredMessageRetries();
+  retryCleanupTimer = setInterval(cleanupExpiredMessageRetries, 5 * 60 * 1000);
+  retryCleanupTimer.unref();
   startWorker();
 
   server.listen(PORT, () => {
@@ -35,6 +59,7 @@ startServer().catch((err) => {
 function gracefulShutdown() {
   logger.info("Received shutdown signal. Stopping worker and server...");
   stopWorker();
+  clearInterval(retryCleanupTimer);
   
   // Close Baileys sockets
   for (const [userId, client] of clientManager.clients.entries()) {
